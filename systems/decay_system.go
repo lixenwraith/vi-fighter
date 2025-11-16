@@ -16,6 +16,7 @@ type DecaySystem struct {
 	currentRow        int
 	startTime         time.Time
 	lastUpdate        time.Time
+	nextDecayTime     time.Time // When the next decay will trigger
 	gameWidth         int
 	gameHeight        int
 	screenWidth       int
@@ -162,12 +163,14 @@ func (s *DecaySystem) startTicker() {
 	}
 
 	interval := s.calculateInterval()
+	now := time.Now()
+	s.nextDecayTime = now.Add(interval)
 	s.ticker = time.AfterFunc(interval, func() {
 		s.animating = true
 		s.currentRow = 0
 		s.startTime = time.Now()
 	})
-	s.lastUpdate = time.Now()
+	s.lastUpdate = now
 }
 
 // calculateInterval calculates the decay interval based on screen size and heat
@@ -207,6 +210,18 @@ func (s *DecaySystem) IsAnimating() bool {
 // CurrentRow returns the current decay row
 func (s *DecaySystem) CurrentRow() int {
 	return s.currentRow
+}
+
+// GetTimeUntilDecay returns seconds until next decay trigger
+func (s *DecaySystem) GetTimeUntilDecay() float64 {
+	if s.animating {
+		return 0.0
+	}
+	remaining := s.nextDecayTime.Sub(time.Now()).Seconds()
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining
 }
 
 // UpdateDimensions updates the game dimensions
