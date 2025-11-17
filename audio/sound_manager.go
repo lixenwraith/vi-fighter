@@ -78,6 +78,8 @@ func (sm *SoundManager) Cleanup() {
 	// Clear mixer
 	sm.mixer.Clear()
 
+	// Note: beep doesn't provide a Close() method for speaker,
+	// but clearing all streamers ensures no audio artifacts
 	sm.initialized = false
 }
 
