@@ -14,8 +14,9 @@ const (
 )
 
 // SoundManager manages all game audio
+// Thread-safe: Uses RWMutex to allow concurrent reads while protecting writes
 type SoundManager struct {
-	mu              sync.Mutex
+	mu              sync.RWMutex
 	trailStreamer   *beep.Ctrl
 	errorStreamer   *beep.Ctrl
 	maxHeatStreamer *beep.Ctrl
@@ -83,18 +84,28 @@ func (sm *SoundManager) Cleanup() {
 	sm.initialized = false
 }
 
+// IsInitialized returns whether the audio system is initialized
+// Thread-safe: Uses RLock for read-only access
+func (sm *SoundManager) IsInitialized() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.initialized
+}
+
 // PlayTrail starts the 'whroom' trail sound
-func (sm *SoundManager) PlayTrail() {
+// Returns error for future extensibility (currently always nil)
+// Audio is optional - callers can safely ignore errors
+func (sm *SoundManager) PlayTrail() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if !sm.initialized {
-		return
+		return nil // Audio not initialized is not an error
 	}
 
 	// If already playing, don't restart
 	if sm.trailStreamer != nil && !sm.trailStreamer.Paused {
-		return
+		return nil
 	}
 
 	// Create a sweeping 'whroom' sound - low to high frequency sweep
@@ -102,6 +113,7 @@ func (sm *SoundManager) PlayTrail() {
 	ctrl := &beep.Ctrl{Streamer: streamer, Paused: false}
 	sm.trailStreamer = ctrl
 	sm.mixer.Add(ctrl)
+	return nil
 }
 
 // StopTrail stops the trail sound
@@ -115,31 +127,36 @@ func (sm *SoundManager) StopTrail() {
 }
 
 // PlayError plays a short error buzz sound
-func (sm *SoundManager) PlayError() {
+// Returns error for future extensibility (currently always nil)
+// Audio is optional - callers can safely ignore errors
+func (sm *SoundManager) PlayError() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if !sm.initialized {
-		return
+		return nil // Audio not initialized is not an error
 	}
 
 	// Create a short low-pitched buzz
 	streamer := beep.Take(sampleRate.N(time.Millisecond*150), NewBuzzGenerator(sampleRate, 120))
 	sm.mixer.Add(streamer)
+	return nil
 }
 
 // PlayMaxHeat starts the rhythmic beat for max heat
-func (sm *SoundManager) PlayMaxHeat() {
+// Returns error for future extensibility (currently always nil)
+// Audio is optional - callers can safely ignore errors
+func (sm *SoundManager) PlayMaxHeat() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if !sm.initialized {
-		return
+		return nil // Audio not initialized is not an error
 	}
 
 	// If already playing, don't restart
 	if sm.maxHeatStreamer != nil && !sm.maxHeatStreamer.Paused {
-		return
+		return nil
 	}
 
 	// Create a synthwave-style rhythmic beat
@@ -147,6 +164,7 @@ func (sm *SoundManager) PlayMaxHeat() {
 	ctrl := &beep.Ctrl{Streamer: streamer, Paused: false}
 	sm.maxHeatStreamer = ctrl
 	sm.mixer.Add(ctrl)
+	return nil
 }
 
 // StopMaxHeat stops the max heat rhythm
@@ -160,17 +178,20 @@ func (sm *SoundManager) StopMaxHeat() {
 }
 
 // PlayDecay plays the breaking/rotting sound
-func (sm *SoundManager) PlayDecay() {
+// Returns error for future extensibility (currently always nil)
+// Audio is optional - callers can safely ignore errors
+func (sm *SoundManager) PlayDecay() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if !sm.initialized {
-		return
+		return nil // Audio not initialized is not an error
 	}
 
 	// Create a crackling/breaking sound effect
 	streamer := beep.Take(sampleRate.N(time.Millisecond*300), NewDecayGenerator(sampleRate))
 	sm.mixer.Add(streamer)
+	return nil
 }
 
 // WhroomGenerator generates a sweeping 'whroom' sound

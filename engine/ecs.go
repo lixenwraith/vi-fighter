@@ -18,6 +18,9 @@ type System interface {
 	Priority() int // Lower values run first
 }
 
+// queryKey represents a unique key for a component query
+type queryKey string
+
 // World contains all entities and their components
 type World struct {
 	mu               sync.RWMutex
@@ -27,6 +30,8 @@ type World struct {
 	spatialIndex     map[int]map[int]Entity // [y][x] -> Entity for position queries
 	positionType     reflect.Type
 	componentsByType map[reflect.Type][]Entity // Reverse index: component type -> entities
+	queryCache       map[queryKey][]Entity     // Cache for GetEntitiesWith queries
+	cacheDirty       bool                      // Flag to invalidate cache on modifications
 }
 
 // NewWorld creates a new ECS world
@@ -37,6 +42,8 @@ func NewWorld() *World {
 		systems:          make([]System, 0),
 		spatialIndex:     make(map[int]map[int]Entity),
 		componentsByType: make(map[reflect.Type][]Entity),
+		queryCache:       make(map[queryKey][]Entity),
+		cacheDirty:       false,
 	}
 }
 
@@ -48,6 +55,7 @@ func (w *World) CreateEntity() Entity {
 	id := w.nextEntityID
 	w.nextEntityID++
 	w.entities[id] = make(map[reflect.Type]Component)
+	w.cacheDirty = true // Invalidate query cache
 	return id
 }
 
@@ -64,6 +72,7 @@ func (w *World) DestroyEntity(entity Entity) {
 	}
 
 	delete(w.entities, entity)
+	w.cacheDirty = true // Invalidate query cache
 
 	// Clean up spatial index
 	for y := range w.spatialIndex {
@@ -86,6 +95,7 @@ func (w *World) AddComponent(entity Entity, component Component) {
 
 	compType := reflect.TypeOf(component)
 	w.entities[entity][compType] = component
+	w.cacheDirty = true // Invalidate query cache
 
 	// Add to component type index
 	w.addToTypeIndex(entity, compType)
@@ -105,6 +115,8 @@ func (w *World) GetComponent(entity Entity, componentType reflect.Type) (Compone
 }
 
 // RemoveComponent removes a component from an entity
+// Properly maintains component type index and invalidates query cache
+// Note: If removing PositionComponent, caller should also call RemoveFromSpatialIndex
 func (w *World) RemoveComponent(entity Entity, componentType reflect.Type) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -112,6 +124,7 @@ func (w *World) RemoveComponent(entity Entity, componentType reflect.Type) {
 	if components, ok := w.entities[entity]; ok {
 		delete(components, componentType)
 		w.removeFromTypeIndex(entity, componentType)
+		w.cacheDirty = true // Invalidate query cache
 	}
 }
 
@@ -127,18 +140,45 @@ func (w *World) HasComponent(entity Entity, componentType reflect.Type) bool {
 	return false
 }
 
+// makeQueryKey creates a unique key for a component query
+func makeQueryKey(componentTypes []reflect.Type) queryKey {
+	key := ""
+	for i, ct := range componentTypes {
+		if i > 0 {
+			key += "|"
+		}
+		key += ct.String()
+	}
+	return queryKey(key)
+}
+
 // GetEntitiesWith returns all entities that have the specified component types
+// Uses caching for performance - cache is invalidated on entity/component modifications
 func (w *World) GetEntitiesWith(componentTypes ...reflect.Type) []Entity {
 	w.mu.RLock()
-	defer w.mu.RUnlock()
 
 	if len(componentTypes) == 0 {
+		w.mu.RUnlock()
 		return nil
 	}
 
+	// Check cache if not dirty
+	key := makeQueryKey(componentTypes)
+	if !w.cacheDirty {
+		if cached, ok := w.queryCache[key]; ok {
+			// Return copy to prevent external modification
+			result := make([]Entity, len(cached))
+			copy(result, cached)
+			w.mu.RUnlock()
+			return result
+		}
+	}
+
+	// Cache miss or dirty - perform query
 	// Start with entities that have the first component type
 	candidates := w.componentsByType[componentTypes[0]]
 	if candidates == nil {
+		w.mu.RUnlock()
 		return nil
 	}
 
@@ -155,6 +195,16 @@ func (w *World) GetEntitiesWith(componentTypes ...reflect.Type) []Entity {
 			result = append(result, entity)
 		}
 	}
+
+	// Upgrade to write lock to cache result
+	w.mu.RUnlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// Store in cache (make a copy to prevent external modification)
+	cached := make([]Entity, len(result))
+	copy(cached, result)
+	w.queryCache[key] = cached
 
 	return result
 }
@@ -185,13 +235,33 @@ func (w *World) AddSystem(system System) {
 	}
 }
 
-// Update runs all systems
+// InvalidateQueryCache clears the entity query cache
+// Called at the start of each frame to reset cache for new query results
+func (w *World) InvalidateQueryCache() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.cacheDirty {
+		w.queryCache = make(map[queryKey][]Entity)
+		w.cacheDirty = false
+	}
+}
+
+// Update runs all systems in priority order
+// Thread-safe: Creates a snapshot of systems under RLock, then iterates without holding the lock.
+// Individual systems are responsible for acquiring appropriate locks when accessing World state.
+// Systems must NOT modify the systems list during their Update() call.
+// Query cache is cleared at the start of each frame if dirty.
 func (w *World) Update(dt time.Duration) {
+	// Clear query cache if it was invalidated during previous frame
+	w.InvalidateQueryCache()
+
 	w.mu.RLock()
 	systems := make([]System, len(w.systems))
 	copy(systems, w.systems)
 	w.mu.RUnlock()
 
+	// Iterate over systems snapshot - each system acquires locks as needed
 	for _, system := range systems {
 		system.Update(w, dt)
 	}

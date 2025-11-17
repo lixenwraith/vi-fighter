@@ -45,11 +45,21 @@ func (s *TrailSystem) Update(world *engine.World, dt time.Duration) {
 			continue
 		} else if elapsed >= 0.5 {
 			// Trail expired - remove entity
+			// Remove from spatial index before destroying
+			if posComp, ok := world.GetComponent(entity, posType); ok {
+				pos := posComp.(components.PositionComponent)
+				world.RemoveFromSpatialIndex(pos.X, pos.Y)
+			}
 			world.DestroyEntity(entity)
 		} else {
 			// Update intensity
 			trail.Intensity *= (1.0 - elapsed*2)
 			if trail.Intensity <= 0.05 {
+				// Remove from spatial index before destroying
+				if posComp, ok := world.GetComponent(entity, posType); ok {
+					pos := posComp.(components.PositionComponent)
+					world.RemoveFromSpatialIndex(pos.X, pos.Y)
+				}
 				world.DestroyEntity(entity)
 			} else {
 				world.AddComponent(entity, trail)

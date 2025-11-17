@@ -26,6 +26,10 @@ type GameContext struct {
 	Screen tcell.Screen
 	Buffer *core.Buffer
 
+	// Timing - monotonic clock for animations
+	// Use MonotonicTime() for animation timing instead of time.Now()
+	StartTime time.Time
+
 	// Screen dimensions
 	Width, Height int
 
@@ -90,19 +94,21 @@ type GameContext struct {
 // NewGameContext creates a new game context with initialized ECS world
 func NewGameContext(screen tcell.Screen) *GameContext {
 	width, height := screen.Size()
+	now := time.Now() // Monotonic start time
 
 	ctx := &GameContext{
 		World:           NewWorld(),
 		Screen:          screen,
+		StartTime:       now,
 		Width:           width,
 		Height:          height,
 		Mode:            ModeNormal,
 		CursorVisible:   true,
-		CursorBlinkTime: time.Now(),
+		CursorBlinkTime: now,
 		NextSeqID:       1,
 		Score:           0,
 		ScoreIncrement:  0,
-		LastSpawn:       time.Now(),
+		LastSpawn:       now,
 	}
 
 	ctx.updateGameArea()
@@ -113,6 +119,12 @@ func NewGameContext(screen tcell.Screen) *GameContext {
 	ctx.Buffer = core.NewBuffer(ctx.GameWidth, ctx.GameHeight)
 
 	return ctx
+}
+
+// MonotonicTime returns the monotonic duration since game start
+// Use this for animation timing to avoid issues with system clock adjustments
+func (g *GameContext) MonotonicTime() time.Duration {
+	return time.Since(g.StartTime)
 }
 
 // updateGameArea calculates the game area dimensions

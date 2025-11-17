@@ -137,13 +137,18 @@ func (s *SpawnSystem) spawnSequence(world *engine.World) {
 
 // findValidPosition finds a valid position for a sequence of given length
 func (s *SpawnSystem) findValidPosition(world *engine.World, seqLength int) (int, int) {
+	const (
+		cursorExclusionX = 5
+		cursorExclusionY = 3
+	)
+
 	maxAttempts := 100
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		x := rand.Intn(s.gameWidth)
 		y := rand.Intn(s.gameHeight)
 
-		// Check if far enough from cursor
-		if math.Abs(float64(x-s.cursorX)) <= 5 && math.Abs(float64(y-s.cursorY)) <= 3 {
+		// Check if far enough from cursor (exclude if close in X OR Y direction)
+		if math.Abs(float64(x-s.cursorX)) <= cursorExclusionX || math.Abs(float64(y-s.cursorY)) <= cursorExclusionY {
 			continue
 		}
 

@@ -46,8 +46,10 @@ func (h *InputHandler) handleKeyEvent(ev *tcell.EventKey) bool {
 		if h.ctx.IsSearchMode() {
 			h.ctx.Mode = engine.ModeNormal
 			h.ctx.SearchText = ""
+			h.ctx.DeleteOperator = false
 		} else if h.ctx.IsInsertMode() {
 			h.ctx.Mode = engine.ModeNormal
+			h.ctx.DeleteOperator = false
 		}
 		return true
 	}
@@ -232,6 +234,7 @@ func (h *InputHandler) handleNormalMode(ev *tcell.EventKey) bool {
 			h.ctx.Mode = engine.ModeInsert
 			h.ctx.MotionCount = 0
 			h.ctx.MotionCommand = ""
+			h.ctx.DeleteOperator = false
 			h.ctx.LastCommand = "" // Clear on mode change
 			return true
 		}
@@ -242,6 +245,7 @@ func (h *InputHandler) handleNormalMode(ev *tcell.EventKey) bool {
 			h.ctx.SearchText = ""
 			h.ctx.MotionCount = 0
 			h.ctx.MotionCommand = ""
+			h.ctx.DeleteOperator = false
 			h.ctx.LastCommand = "" // Clear on mode change
 			return true
 		}

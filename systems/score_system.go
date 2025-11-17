@@ -50,9 +50,9 @@ func (s *ScoreSystem) Update(world *engine.World, dt time.Duration) {
 	isMaxHeat := s.ctx.ScoreIncrement >= heatBarWidth
 
 	if isMaxHeat && !s.ctx.WasMaxHeat {
-		// Just reached max heat - start the rhythm
+		// Just reached max heat - start the rhythm (fire-and-forget)
 		if s.ctx.SoundManager != nil {
-			s.ctx.SoundManager.PlayMaxHeat()
+			_ = s.ctx.SoundManager.PlayMaxHeat()
 		}
 	} else if !isMaxHeat && s.ctx.WasMaxHeat {
 		// Dropped below max heat - stop the rhythm
@@ -73,7 +73,7 @@ func (s *ScoreSystem) HandleCharacterTyping(world *engine.World, cursorX, cursor
 		s.ctx.CursorErrorTime = time.Now()
 		s.ctx.ScoreIncrement = 0 // Reset heat
 		if s.ctx.SoundManager != nil {
-			s.ctx.SoundManager.PlayError()
+			_ = s.ctx.SoundManager.PlayError()
 		}
 		return
 	}
@@ -86,7 +86,7 @@ func (s *ScoreSystem) HandleCharacterTyping(world *engine.World, cursorX, cursor
 		s.ctx.CursorErrorTime = time.Now()
 		s.ctx.ScoreIncrement = 0
 		if s.ctx.SoundManager != nil {
-			s.ctx.SoundManager.PlayError()
+			_ = s.ctx.SoundManager.PlayError()
 		}
 		return
 	}
@@ -100,7 +100,7 @@ func (s *ScoreSystem) HandleCharacterTyping(world *engine.World, cursorX, cursor
 		s.ctx.CursorErrorTime = time.Now()
 		s.ctx.ScoreIncrement = 0
 		if s.ctx.SoundManager != nil {
-			s.ctx.SoundManager.PlayError()
+			_ = s.ctx.SoundManager.PlayError()
 		}
 		return
 	}
@@ -185,7 +185,7 @@ func (s *ScoreSystem) HandleCharacterTyping(world *engine.World, cursorX, cursor
 		s.ctx.CursorErrorTime = time.Now()
 		s.ctx.ScoreIncrement = 0
 		if s.ctx.SoundManager != nil {
-			s.ctx.SoundManager.PlayError()
+			_ = s.ctx.SoundManager.PlayError()
 		}
 	}
 }
@@ -203,9 +203,9 @@ func (s *ScoreSystem) extendTrail(duration time.Duration) {
 		s.ctx.TrailEndTime = s.ctx.TrailEndTime.Add(duration)
 	} else {
 		s.ctx.TrailEndTime = now.Add(duration)
-		// Just activated trail - start the whroom sound
+		// Just activated trail - start the whroom sound (fire-and-forget)
 		if s.ctx.SoundManager != nil {
-			s.ctx.SoundManager.PlayTrail()
+			_ = s.ctx.SoundManager.PlayTrail()
 		}
 	}
 	s.ctx.TrailEnabled = true

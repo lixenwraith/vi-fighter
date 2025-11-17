@@ -241,9 +241,9 @@ func deleteCharAt(ctx *engine.GameContext, x, y int) {
 		if seq.Type == components.SequenceGreen || seq.Type == components.SequenceBlue {
 			ctx.ScoreIncrement = 0 // Reset heat
 		} else if seq.Type == components.SequenceRed {
-			// Play decay sound for red character deletion
+			// Play decay sound for red character deletion (fire-and-forget)
 			if ctx.SoundManager != nil {
-				ctx.SoundManager.PlayDecay()
+				_ = ctx.SoundManager.PlayDecay()
 			}
 		}
 	}
