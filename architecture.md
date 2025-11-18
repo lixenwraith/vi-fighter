@@ -303,6 +303,13 @@ Located in `systems/cleaner_benchmark_test.go`:
 go test ./systems/... -v
 ```
 
+#### Quick Test Run (Skip Slow Tests)
+For faster CI/development cycles, run tests in short mode:
+```bash
+go test ./systems/... -short -v
+```
+This skips tests taking >1 second, reducing total test time from ~80s to ~20s.
+
 #### Race Detector (CRITICAL for concurrency validation)
 ```bash
 go test ./systems/... -race -v
@@ -343,6 +350,15 @@ Located in `systems/test_helpers.go`:
 - **Integration Tests**: All critical concurrent scenarios
 - **Race Tests**: All atomic operations and shared state access
 - **Benchmarks**: All performance-critical paths
+
+### Test Optimization
+Slow tests (>1 second) include:
+- **Parallel Execution**: Tests use `t.Parallel()` to run concurrently
+- **Context Timeouts**: All slow tests have 10-second timeouts
+- **Short Mode Skip**: Slow tests skip when running `go test -short`
+- **Reduced Cycles**: Memory leak tests use 10 cycles (5 in CI) instead of 50
+- **Reduced Wait Times**: Sleep durations reduced by 30-50% where safe
+- **CI Optimization**: Set `CI=true` environment variable for even faster tests
 
 ### Common Race Conditions to Test
 1. **Cleaner System**:

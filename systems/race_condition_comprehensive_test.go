@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"context"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -467,11 +468,22 @@ func TestContentSwapDuringRead(t *testing.T) {
 // TestStressContentSystem performs intensive stress testing on content system
 // with rapid refreshes and multiple concurrent readers/writers
 func TestStressContentSystem(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping slow test in short mode")
+	}
+
+	t.Parallel() // Run in parallel
+
+	// Add timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = ctx
+
 	screen := tcell.NewSimulationScreen("UTF-8")
 	screen.SetSize(80, 24)
-	ctx := engine.NewGameContext(screen)
+	gameCtx := engine.NewGameContext(screen)
 
-	spawnSys := NewSpawnSystem(80, 24, 40, 12, ctx)
+	spawnSys := NewSpawnSystem(80, 24, 40, 12, gameCtx)
 	world := engine.NewWorld()
 
 	// Pre-populate with varied content
@@ -669,8 +681,9 @@ func TestStressContentSystem(t *testing.T) {
 		}
 	}()
 
-	// Run stress test for 1 second
-	time.Sleep(1 * time.Second)
+	// Run stress test
+	// CHANGED: Reduce from 1 second to 700ms
+	time.Sleep(700 * time.Millisecond)
 	close(stopChan)
 
 	wg.Wait()

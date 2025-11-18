@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"context"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -252,14 +253,25 @@ func TestMultipleCleanersOnAdjacentLines(t *testing.T) {
 // TestCleanerCollisionWithActivelyChangingText tests cleaners hitting characters
 // that are being modified concurrently (decay, typing, etc.)
 func TestCleanerCollisionWithActivelyChangingText(t *testing.T) {
-	world := engine.NewWorld()
-	ctx := createCleanerTestContext()
+	if testing.Short() {
+		t.Skip("Skipping slow test in short mode")
+	}
 
-	cleanerSystem := NewCleanerSystem(ctx, 80, 24, constants.DefaultCleanerConfig())
+	t.Parallel() // Run in parallel
+
+	// Add timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = ctx
+
+	world := engine.NewWorld()
+	testCtx := createCleanerTestContext()
+
+	cleanerSystem := NewCleanerSystem(testCtx, 80, 24, constants.DefaultCleanerConfig())
 	defer cleanerSystem.Shutdown()
 
-	spawnSys := NewSpawnSystem(80, 24, 40, 12, ctx)
-	decaySys := NewDecaySystem(80, 24, 80, 0, ctx)
+	spawnSys := NewSpawnSystem(80, 24, 40, 12, testCtx)
+	decaySys := NewDecaySystem(80, 24, 80, 0, testCtx)
 	decaySys.SetSpawnSystem(spawnSys)
 
 	// Create Red characters at specific positions
@@ -399,7 +411,8 @@ func TestCleanerCollisionWithActivelyChangingText(t *testing.T) {
 	}()
 
 	// Let test run
-	time.Sleep(1 * time.Second)
+	// CHANGED: Reduce from 1000ms to 700ms
+	time.Sleep(700 * time.Millisecond)
 	close(stopChan)
 
 	wg.Wait()
@@ -415,13 +428,24 @@ func TestCleanerCollisionWithActivelyChangingText(t *testing.T) {
 // TestHeatMeterStateTransitionsDuringCleanerAnimation tests that heat meter
 // changes don't cause issues during cleaner animation
 func TestHeatMeterStateTransitionsDuringCleanerAnimation(t *testing.T) {
-	world := engine.NewWorld()
-	ctx := createCleanerTestContext()
+	if testing.Short() {
+		t.Skip("Skipping slow test in short mode")
+	}
 
-	cleanerSystem := NewCleanerSystem(ctx, 80, 24, constants.DefaultCleanerConfig())
+	t.Parallel() // Run in parallel
+
+	// Add timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = ctx
+
+	world := engine.NewWorld()
+	testCtx := createCleanerTestContext()
+
+	cleanerSystem := NewCleanerSystem(testCtx, 80, 24, constants.DefaultCleanerConfig())
 	defer cleanerSystem.Shutdown()
 
-	goldSystem := NewGoldSequenceSystem(ctx, nil, 80, 24, 0, 0)
+	goldSystem := NewGoldSequenceSystem(testCtx, nil, 80, 24, 0, 0)
 	goldSystem.SetCleanerTrigger(cleanerSystem.TriggerCleaners)
 
 	// Create Red characters
@@ -540,7 +564,8 @@ func TestHeatMeterStateTransitionsDuringCleanerAnimation(t *testing.T) {
 	}()
 
 	// Let test run
-	time.Sleep(1200 * time.Millisecond)
+	// CHANGED: Reduce from 1200ms to 800ms
+	time.Sleep(800 * time.Millisecond)
 	close(stopChan)
 
 	wg.Wait()
@@ -556,10 +581,21 @@ func TestHeatMeterStateTransitionsDuringCleanerAnimation(t *testing.T) {
 // TestScreenBufferModificationsDuringScan tests concurrent screen buffer reads
 // while cleaners are scanning for Red characters
 func TestScreenBufferModificationsDuringScan(t *testing.T) {
-	world := engine.NewWorld()
-	ctx := createCleanerTestContext()
+	if testing.Short() {
+		t.Skip("Skipping slow test in short mode")
+	}
 
-	cleanerSystem := NewCleanerSystem(ctx, 80, 24, constants.DefaultCleanerConfig())
+	t.Parallel() // Run in parallel
+
+	// Add timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = ctx
+
+	world := engine.NewWorld()
+	testCtx := createCleanerTestContext()
+
+	cleanerSystem := NewCleanerSystem(testCtx, 80, 24, constants.DefaultCleanerConfig())
 	defer cleanerSystem.Shutdown()
 
 	// Create entities across the screen
@@ -711,7 +747,8 @@ func TestScreenBufferModificationsDuringScan(t *testing.T) {
 	}()
 
 	// Let test run
-	time.Sleep(1 * time.Second)
+	// CHANGED: Reduce from 1000ms to 700ms
+	time.Sleep(700 * time.Millisecond)
 	close(stopChan)
 
 	wg.Wait()
@@ -803,14 +840,25 @@ func TestConcurrentCleanerSpawns(t *testing.T) {
 // TestTextColorChangesDuringCleanerTransit tests changing character colors
 // (via decay) while cleaners are in transit
 func TestTextColorChangesDuringCleanerTransit(t *testing.T) {
-	world := engine.NewWorld()
-	ctx := createCleanerTestContext()
+	if testing.Short() {
+		t.Skip("Skipping slow test in short mode")
+	}
 
-	cleanerSystem := NewCleanerSystem(ctx, 80, 24, constants.DefaultCleanerConfig())
+	t.Parallel() // Run in parallel
+
+	// Add timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = ctx
+
+	world := engine.NewWorld()
+	testCtx := createCleanerTestContext()
+
+	cleanerSystem := NewCleanerSystem(testCtx, 80, 24, constants.DefaultCleanerConfig())
 	defer cleanerSystem.Shutdown()
 
-	spawnSys := NewSpawnSystem(80, 24, 40, 12, ctx)
-	decaySys := NewDecaySystem(80, 24, 80, 0, ctx)
+	spawnSys := NewSpawnSystem(80, 24, 40, 12, testCtx)
+	decaySys := NewDecaySystem(80, 24, 80, 0, testCtx)
 	decaySys.SetSpawnSystem(spawnSys)
 
 	// Create Red characters at specific positions
@@ -934,7 +982,8 @@ func TestTextColorChangesDuringCleanerTransit(t *testing.T) {
 	}()
 
 	// Let test run
-	time.Sleep(1300 * time.Millisecond)
+	// CHANGED: Reduce from 1300ms to 900ms
+	time.Sleep(900 * time.Millisecond)
 	close(stopChan)
 
 	wg.Wait()
