@@ -114,6 +114,9 @@ func main() {
 	nuggetSystem := systems.NewNuggetSystem(ctx)
 	ctx.World.AddSystem(nuggetSystem)
 
+	drainSystem := systems.NewDrainSystem(ctx)
+	ctx.World.AddSystem(drainSystem)
+
 	decaySystem := systems.NewDecaySystem(ctx.GameWidth, ctx.GameHeight, ctx)
 	ctx.World.AddSystem(decaySystem)
 
