@@ -198,9 +198,11 @@ func main() {
 			// Check if boost should expire (atomic CAS pattern)
 			ctx.State.UpdateBoostTimerAtomic()
 
-			// Update all ECS systems
+			// Update all ECS systems (skip if paused)
 			dt := 16 * time.Millisecond
-			ctx.World.Update(dt)
+			if !ctx.IsPaused.Load() {
+				ctx.World.Update(dt)
+			}
 
 			// Wait for all updates to complete before rendering (frame barrier)
 			// This ensures no entity modifications occur during rendering

@@ -74,6 +74,10 @@ type ClockScheduler struct {
 	tickCount uint64
 	mu        sync.RWMutex
 
+	// Pause tracking
+	pauseStartTime     time.Time     // When the current pause started (zero if not paused)
+	totalPauseDuration time.Duration // Accumulated pause time
+
 	// System references needed for triggering transitions
 	// These will be set via SetSystems() after scheduler creation
 	goldSystem    GoldSequenceSystemInterface
@@ -150,6 +154,30 @@ func (cs *ClockScheduler) tick() {
 	goldSys := cs.goldSystem
 	decaySys := cs.decaySystem
 	cleanerSys := cs.cleanerSystem
+
+	// Check pause state and track pause duration
+	isPaused := cs.ctx.IsPaused.Load()
+	now := cs.timeProvider.Now()
+
+	if isPaused {
+		// Game is paused
+		if cs.pauseStartTime.IsZero() {
+			// Just entered pause - record start time
+			cs.pauseStartTime = now
+		}
+		// Skip all phase transition logic while paused
+		cs.mu.Unlock()
+		return
+	} else {
+		// Game is not paused
+		if !cs.pauseStartTime.IsZero() {
+			// Just exited pause - accumulate pause duration
+			pauseDuration := now.Sub(cs.pauseStartTime)
+			cs.totalPauseDuration += pauseDuration
+			cs.pauseStartTime = time.Time{} // Reset to zero
+		}
+	}
+
 	cs.mu.Unlock()
 
 	// Get current phase from GameState
@@ -254,4 +282,14 @@ func (cs *ClockScheduler) GetTickCount() uint64 {
 // GetTickRate returns the clock tick interval (always 50ms)
 func (cs *ClockScheduler) GetTickRate() time.Duration {
 	return 50 * time.Millisecond
+}
+
+// AdjustForPause adjusts a timestamp by adding the total accumulated pause duration
+// This allows time-based comparisons to account for paused time
+// For example, if a timer was set to expire at time T, and the game was paused for D duration,
+// the adjusted expiration time becomes T + D
+func (cs *ClockScheduler) AdjustForPause(timestamp time.Time) time.Time {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return timestamp.Add(cs.totalPauseDuration)
 }
