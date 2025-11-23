@@ -47,10 +47,10 @@ func TestBoostRapidToggle(t *testing.T) {
 			ctx.World.AddComponent(entity, pos)
 			ctx.World.AddComponent(entity, char)
 			ctx.World.AddComponent(entity, seq)
-	
-		tx := ctx.World.BeginSpatialTransaction()
-		tx.Spawn(entity, pos.X, pos.Y)
-		tx.Commit()
+
+			tx := ctx.World.BeginSpatialTransaction()
+			tx.Spawn(entity, pos.X, pos.Y)
+			tx.Commit()
 
 			// Type the character to trigger boost extension
 			scoreSystem.HandleCharacterTyping(ctx.World, ctx.CursorX, ctx.CursorY, rune('a'+(i%26)))
@@ -256,10 +256,10 @@ func TestBoostWithScoreUpdates(t *testing.T) {
 			ctx.World.AddComponent(entity, pos)
 			ctx.World.AddComponent(entity, char)
 			ctx.World.AddComponent(entity, seq)
-	
-		tx := ctx.World.BeginSpatialTransaction()
-		tx.Spawn(entity, pos.X, pos.Y)
-		tx.Commit()
+
+			tx := ctx.World.BeginSpatialTransaction()
+			tx.Spawn(entity, pos.X, pos.Y)
+			tx.Commit()
 
 			scoreSystem.HandleCharacterTyping(ctx.World, ctx.CursorX, ctx.CursorY, rune('a'+(i%26)))
 			time.Sleep(1 * time.Millisecond)
@@ -369,10 +369,10 @@ func TestSimulateFullGameLoop(t *testing.T) {
 			ctx.World.AddComponent(entity, pos)
 			ctx.World.AddComponent(entity, char)
 			ctx.World.AddComponent(entity, seq)
-	
-		tx := ctx.World.BeginSpatialTransaction()
-		tx.Spawn(entity, pos.X, pos.Y)
-		tx.Commit()
+
+			tx := ctx.World.BeginSpatialTransaction()
+			tx.Spawn(entity, pos.X, pos.Y)
+			tx.Commit()
 
 			scoreSystem.HandleCharacterTyping(ctx.World, ctx.CursorX, ctx.CursorY, rune('a'+(i%26)))
 			time.Sleep(10 * time.Millisecond) // Simulate typing speed
@@ -508,12 +508,12 @@ func TestPingTimerAtomicCAS(t *testing.T) {
 		}
 	}()
 
-	// Goroutine 3: Occasionally add to ping timer (simulate ping activation)
+	// Goroutine 3: Occasionally set ping timer (simulate ping activation)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 10; i++ {
-			ctx.AddPingGridTimer(0.5)
+			ctx.SetPingGridTimer(0.5)
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
