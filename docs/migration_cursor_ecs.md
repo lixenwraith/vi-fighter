@@ -38,7 +38,7 @@ Migration from hybrid Atomic/ECS to Pure ECS model for cursor and spawn populati
 - Added SpawnSystem.getAvailableColorsFromCensus() to replace atomic counter checks
 - Updated SpawnSystem.Update() and spawnSequence() to use census
 - Removed SpawnSystem.AddColorCount() method and all counter update calls
-- Removed counter updates from ScoreSystem.HandleCharacterTyping()
+- Removed counter updates from EnergySystem.HandleCharacterTyping()
 - Removed counter updates from DecaySystem.applyDecayToCharacter()
 - Removed counter updates from DrainSystem.handleCharacterCollision()
 - Removed all color counter atomics from GameState:
@@ -70,7 +70,7 @@ Migration from hybrid Atomic/ECS to Pure ECS model for cursor and spawn populati
   - GameState: AddColorCount(), ReadColorCounts(), GetTotalColorCount(), CanSpawnNewColor()
   - ColorCountSnapshot type
   - SpawnSystem: AddColorCount() method and all counter update calls
-  - Counter updates from ScoreSystem, DecaySystem, DrainSystem
+  - Counter updates from EnergySystem, DecaySystem, DrainSystem
 - **Deprecated but Not Yet Removed**:
   - GameState.CursorX/Y atomics (kept for backward compatibility, pending full migration)
   - GameState.SetCursorX/Y, GetCursorX/Y methods (pending renderer migration)
@@ -101,7 +101,7 @@ Migration from hybrid Atomic/ECS to Pure ECS model for cursor and spawn populati
 - **REMOVED**: `ColorCountSnapshot` type
 - **REMOVED**: `SpawnSystem.AddColorCount()` method
 - **CHANGED**: SpawnSystem now uses per-frame census instead of counters
-- **CHANGED**: ScoreSystem no longer updates color counters on entity destruction
+- **CHANGED**: EnergySystem no longer updates color counters on entity destruction
 - **CHANGED**: DecaySystem no longer updates color counters on level/color transitions
 - **CHANGED**: DrainSystem no longer updates color counters on entity destruction
 
