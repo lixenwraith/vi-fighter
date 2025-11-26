@@ -12,7 +12,7 @@ import (
 
 // TODO: this file is becoming the new god, transition to capability or deprecate it, refactor
 
-// TODO: Remove these dependencies?
+// TODO: use events to remove these dependency injections and decouple
 // InputHandler processes user input events
 type InputHandler struct {
 	ctx          *engine.GameContext
