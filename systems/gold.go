@@ -54,7 +54,7 @@ func (s *GoldSystem) Update(world *engine.World, dt time.Duration) {
 		// If spawn fails, system will remain in PhaseNormal and can retry on next update
 		if s.spawnGold(world) {
 			// Mark initial spawn as complete (whether it succeeded or not)
-			// TODO: I don't like this, why Gold is in bootstrap process, it's just an entity that happens to spawn early
+			// TODO: decouple by refactoring into a proper bootstrap process of GameState instead of here
 			s.ctx.State.SetInitialSpawnComplete()
 		}
 	}
