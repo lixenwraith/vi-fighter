@@ -10,6 +10,9 @@ import (
 	"github.com/lixenwraith/vi-fighter/systems"
 )
 
+// TODO: this file is becoming the new god, transition to capability or deprecate it, refactor
+
+// TODO: Remove these dependencies?
 // InputHandler processes user input events
 type InputHandler struct {
 	ctx          *engine.GameContext
