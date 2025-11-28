@@ -6,7 +6,7 @@
 |-------|--------|-------|
 | Phase 0 | ✅ Complete | Foundation types in `render/` |
 | Phase 1 | ✅ Complete | Hybrid integration |
-| Phase 2 | Pending | Legacy renderer modification |
+| Phase 2 | ✅ Complete | Legacy renderer modification |
 | Phase 3 | Pending | Incremental extraction |
 | Final | Pending | Cleanup |
 
