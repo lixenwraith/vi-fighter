@@ -8,7 +8,14 @@
 | Phase 1 | ✅ Complete | Hybrid integration |
 | Phase 2 | ✅ Complete | Legacy renderer modification |
 | Phase 3a | ✅ Complete | UI renderers extracted (heat meter, line numbers, column indicators, status bar) |
-| Phase 3 | In Progress | Incremental extraction (3b-3h remaining) |
+| Phase 3b | ✅ Complete | Ping grid renderer extracted |
+| Phase 3c | ✅ Complete | Shield renderer extracted |
+| Phase 3d | ✅ Complete | Characters renderer extracted |
+| Phase 3e | ✅ Complete | Effects renderer extracted (decay, cleaners, removal flashes, materializers) |
+| Phase 3f | ✅ Complete | Drain renderer extracted |
+| Phase 3g | ✅ Complete | Cursor renderer extracted |
+| Phase 3h | ✅ Complete | Overlay renderer extracted |
+| Phase 3 | ✅ Complete | All draw functions extracted |
 | Final | Pending | Cleanup |
 
 ## Package Structure
@@ -29,7 +36,14 @@ render/
     ├── heat_meter.go
     ├── line_numbers.go
     ├── column_indicators.go
-    └── status_bar.go
+    ├── status_bar.go
+    ├── ping_grid.go
+    ├── shields.go
+    ├── characters.go
+    ├── effects.go
+    ├── drain.go
+    ├── cursor.go
+    └── overlay.go
 ```
 
 ## Core Type Signatures
