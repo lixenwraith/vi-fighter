@@ -7,7 +7,7 @@ Implementing new Heat/Energy/Shield/Drain mechanics per requirements.
 - [x] Phase 1: Constants & Components
 - [x] Phase 2: Shield Lifecycle
 - [x] Phase 3: Drain Spawning
-- [ ] Phase 4: Collisions
+- [x] Phase 4: Collisions
 - [ ] Phase 5: Shield Zone Protection
 - [ ] Phase 6: Passive Drain & Cleanup
 
@@ -38,3 +38,8 @@ Implementing new Heat/Energy/Shield/Drain mechanics per requirements.
 - Removed energy <= 0 despawn from main Update loop
 - Spawn position validation: skip cells with existing drain
 - Energy-based despawn moved to Phase 6 (conditional on !ShieldActive)
+
+## Collisions (Phase 4)
+- Drain-Drain: If multiple drains at same cell, all involved despawn with flash
+- Drain-Cursor (No Shield): -10 Heat, drain despawns
+- Drain-Cursor (Shield Active): Energy drain only, no heat loss, drain persists
