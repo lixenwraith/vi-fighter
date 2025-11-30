@@ -8,7 +8,7 @@ Implementing new Heat/Energy/Shield/Drain mechanics per requirements.
 - [x] Phase 2: Shield Lifecycle
 - [x] Phase 3: Drain Spawning
 - [x] Phase 4: Collisions
-- [ ] Phase 5: Shield Zone Protection
+- [x] Phase 5: Shield Zone Protection
 - [ ] Phase 6: Passive Drain & Cleanup
 
 ## Key Mechanics Summary
@@ -43,3 +43,8 @@ Implementing new Heat/Energy/Shield/Drain mechanics per requirements.
 - Drain-Drain: If multiple drains at same cell, all involved despawn with flash
 - Drain-Cursor (No Shield): -10 Heat, drain despawns
 - Drain-Cursor (Shield Active): Energy drain only, no heat loss, drain persists
+
+## Shield Zone Protection (Phase 5)
+- Drains inside shield ellipse (not just on cursor) drain 100 energy per interval
+- Ellipse check: (dx/rx)^2 + (dy/ry)^2 <= 1
+- Energy drain applies to ALL drains in shield, including those on cursor
