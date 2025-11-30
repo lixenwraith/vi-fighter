@@ -5,7 +5,7 @@ Implementing new Heat/Energy/Shield/Drain mechanics per requirements.
 
 ## Phase Status
 - [x] Phase 1: Constants & Components
-- [ ] Phase 2: Shield Lifecycle
+- [x] Phase 2: Shield Lifecycle
 - [ ] Phase 3: Drain Spawning
 - [ ] Phase 4: Collisions
 - [ ] Phase 5: Shield Zone Protection
@@ -26,3 +26,9 @@ Implementing new Heat/Energy/Shield/Drain mechanics per requirements.
 
 ## Component Changes (Phase 1)
 - ShieldComponent.Sources uint8 added (bitmask for activation sources)
+
+## Shield Lifecycle (Phase 2)
+- BoostSystem now sets/clears ShieldSourceBoost in Sources bitmask
+- Shield component persists; only Sources field changes
+- ShieldRenderer checks IsShieldActive() before rendering
+- IsShieldActive = Sources != 0 AND Energy > 0
