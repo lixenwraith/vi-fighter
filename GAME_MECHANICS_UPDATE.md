@@ -6,7 +6,7 @@ Implementing new Heat/Energy/Shield/Drain mechanics per requirements.
 ## Phase Status
 - [x] Phase 1: Constants & Components
 - [x] Phase 2: Shield Lifecycle
-- [ ] Phase 3: Drain Spawning
+- [x] Phase 3: Drain Spawning
 - [ ] Phase 4: Collisions
 - [ ] Phase 5: Shield Zone Protection
 - [ ] Phase 6: Passive Drain & Cleanup
@@ -32,3 +32,9 @@ Implementing new Heat/Energy/Shield/Drain mechanics per requirements.
 - Shield component persists; only Sources field changes
 - ShieldRenderer checks IsShieldActive() before rendering
 - IsShieldActive = Sources != 0 AND Energy > 0
+
+## Drain Spawning (Phase 3)
+- Target drain count = floor(Heat / 10), max 10
+- Removed energy <= 0 despawn from main Update loop
+- Spawn position validation: skip cells with existing drain
+- Energy-based despawn moved to Phase 6 (conditional on !ShieldActive)
