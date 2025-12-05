@@ -259,6 +259,9 @@ func (cs *CleanerSystem) spawnCleaners(world *engine.World) {
 		entity := world.CreateEntity()
 		world.Positions.Add(entity, components.PositionComponent{X: startGridX, Y: startGridY})
 		world.Cleaners.Add(entity, comp)
+		world.Protections.Add(entity, components.ProtectionComponent{
+			Mask: components.ProtectFromDrain | components.ProtectFromCull,
+		})
 	}
 }
 
@@ -351,6 +354,10 @@ func (cs *CleanerSystem) spawnDirectionalCleaners(world *engine.World, originX, 
 		entity := world.CreateEntity()
 		world.Positions.Add(entity, components.PositionComponent{X: startGridX, Y: startGridY})
 		world.Cleaners.Add(entity, comp)
+		// TODO: centralize protection, to avoid frame 0 bug, and all other good stuff implement entity factory, someday, hopefully soon...
+		world.Protections.Add(entity, components.ProtectionComponent{
+			Mask: components.ProtectFromDrain | components.ProtectFromCull,
+		})
 	}
 }
 
