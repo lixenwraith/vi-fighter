@@ -75,6 +75,11 @@ type HeatSetPayload struct {
 	Value int
 }
 
+// GoldEnablePayload controls gold spawning eligibility
+type GoldEnablePayload struct {
+	Enabled bool
+}
+
 // GoldSpawnedPayload anchors countdown timer to sequence position
 type GoldSpawnedPayload struct {
 	SequenceID int
@@ -144,16 +149,6 @@ type FlashRequestPayload struct {
 	Char rune
 }
 
-// PhaseChangePayload carries the new game phase
-type PhaseChangePayload struct {
-	NewPhase int // Maps to engine.GamePhase
-}
-
-// DecayTimerStartPayload carries heat value for decay interval calculation
-type DecayTimerStartPayload struct {
-	HeatValue int
-}
-
 // NuggetCollectedPayload signals successful nugget collection
 type NuggetCollectedPayload struct {
 	Entity core.Entity
@@ -167,4 +162,11 @@ type NuggetDestroyedPayload struct {
 // SoundRequestPayload contains the sound type to play
 type SoundRequestPayload struct {
 	SoundType audio.SoundType
+}
+
+// DeathRequestPayload contains batch death request
+// EffectEvent: 0 = silent death, EventFlashRequest = flash, future: explosion, chain death
+type DeathRequestPayload struct {
+	Entities    []core.Entity
+	EffectEvent EventType
 }

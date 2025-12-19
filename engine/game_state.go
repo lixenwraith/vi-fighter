@@ -39,11 +39,6 @@ type GameState struct {
 	EntityCount   int     // Current number of entities on screen
 	MaxEntities   int     // Maximum allowed entities
 	ScreenDensity float64 // Percentage of screen filled (0.0-1.0)
-
-	// Phase State (Infrastructure)
-	// Controls which game mechanic is active (Normal, Gold, Decay Wait, Decay Animation)
-	CurrentPhase   GamePhase // Current game phase
-	PhaseStartTime time.Time // When current phase started
 }
 
 // initState initializes all game state fields to starting values
@@ -66,10 +61,6 @@ func (gs *GameState) initState(now time.Time) {
 
 	// Spawn state
 	gs.EntityCount = 0
-
-	// Phase state
-	gs.CurrentPhase = PhaseNormal
-	gs.PhaseStartTime = now
 }
 
 // NewGameState creates a new centralized game state
@@ -87,47 +78,10 @@ func (gs *GameState) Reset(now time.Time) {
 	gs.initState(now)
 }
 
-// ===== PHASE STATE ACCESSORS (mutex protected) =====
-
-// PhaseSnapshot provides a consistent view of phase state
-type PhaseSnapshot struct {
-	Phase     GamePhase
-	StartTime time.Time
-	Duration  time.Duration
-}
-
-// SetPhase updates phase state (called by ClockScheduler)
-func (gs *GameState) SetPhase(phase GamePhase, now time.Time) {
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
-	gs.CurrentPhase = phase
-	gs.PhaseStartTime = now
-}
-
-// ReadPhaseState returns current phase snapshot
-func (gs *GameState) ReadPhaseState(now time.Time) PhaseSnapshot {
-	gs.mu.RLock()
-	defer gs.mu.RUnlock()
-	return PhaseSnapshot{
-		Phase:     gs.CurrentPhase,
-		StartTime: gs.PhaseStartTime,
-		Duration:  now.Sub(gs.PhaseStartTime),
-	}
-}
-
-// ===== SEQUENCE ID ACCESSORS (atomic) =====
-
-// GetNextSeqID returns the next sequence ID
-func (gs *GameState) GetNextSeqID() int {
-	return int(gs.NextSeqID.Load())
-}
-
 // IncrementSeqID increments and returns the next sequence ID
 func (gs *GameState) IncrementSeqID() int {
 	return int(gs.NextSeqID.Add(1))
 }
-
-// ===== FRAME COUNTER ACCESSORS (atomic) =====
 
 // GetFrameNumber returns the current frame number
 func (gs *GameState) GetFrameNumber() int64 {
@@ -137,19 +91,6 @@ func (gs *GameState) GetFrameNumber() int64 {
 // IncrementFrameNumber increments and returns the frame number
 func (gs *GameState) IncrementFrameNumber() int64 {
 	return gs.FrameNumber.Add(1)
-}
-
-// ===== SPAWN STATE ACCESSORS (mutex protected) =====
-
-// SpawnStateSnapshot is a read-only snapshot for safe concurrent access
-type SpawnStateSnapshot struct {
-	LastTime       time.Time
-	NextTime       time.Time
-	RateMultiplier float64
-	Enabled        bool
-	EntityCount    int
-	MaxEntities    int
-	ScreenDensity  float64
 }
 
 // ===== RUNTIME METRICS ACCESSORS =====
@@ -198,18 +139,6 @@ func (gs *GameState) UpdateAPM(registry *status.Registry) {
 	if registry != nil {
 		registry.Ints.Get("engine.apm").Store(int64(total))
 	}
-}
-
-// ResetRuntimeStats resets Ticks and APM statistics (for new game)
-func (gs *GameState) ResetRuntimeStats() {
-	gs.GameTicks.Store(0)
-	gs.CurrentAPM.Store(0)
-	gs.PendingActions.Store(0)
-
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
-	gs.apmHistory = [60]uint64{}
-	gs.apmHistoryIndex = 0
 }
 
 // ===== GRAYOUT EFFECT ACCESSORS (atomic) =====

@@ -15,7 +15,7 @@ import (
 	"github.com/lixenwraith/vi-fighter/events"
 	"github.com/lixenwraith/vi-fighter/input"
 	"github.com/lixenwraith/vi-fighter/manifest"
-	"github.com/lixenwraith/vi-fighter/modes"
+	"github.com/lixenwraith/vi-fighter/mode"
 	"github.com/lixenwraith/vi-fighter/render"
 	"github.com/lixenwraith/vi-fighter/systems"
 	"github.com/lixenwraith/vi-fighter/terminal"
@@ -138,46 +138,58 @@ func main() {
 		orchestrator.Register(renderer, entry.Priority)
 	}
 
-	// // Event-driven system, not added to World.systems list since no Update(dt) logic
-	// audioSystem := systems.NewAudioSystem(ctx.World)
-	// // No factor for command system
-	//
-	// commandSystem := systems.NewCommandSystem(ctx)
-	//
-
 	// === PHASE 8: Input & Clock Scheduler ===
 	// Create input handler
 	inputMachine := input.NewMachine()
-	router := modes.NewRouter(ctx, inputMachine)
+	router := mode.NewRouter(ctx, inputMachine)
 
 	// Create frame synchronization channel
 	frameReady := make(chan struct{}, 1)
 
-	// Create clock scheduler with frame synchronization, handling systems phase transition and triggers
-	clockScheduler, gameUpdateDone := engine.NewClockScheduler(ctx, constants.GameUpdateInterval, frameReady)
+	// Create clock scheduler with frame synchronization
+	clockScheduler, gameUpdateDone, resetChan := engine.NewClockScheduler(
+		world,
+		ctx.PausableClock,
+		&ctx.IsPaused,
+		constants.GameUpdateInterval,
+		frameReady,
+	)
 
-	// Signal initial frame ready
-	frameReady <- struct{}{}
+	// Wire reset channels to GameContext for MetaSystem access
+	ctx.ResetChan = resetChan
 
+	// === Phase 9: FSM Setup ===
+	// Initialize Event Registry first (for payload reflection)
+	events.InitRegistry()
+
+	// Load FSM Config
+	// For now we use the default JSON embedded in manifest
+	if err := clockScheduler.LoadFSM(manifest.DefaultGameplayFSMConfig, manifest.RegisterFSMComponents); err != nil {
+		panic(fmt.Sprintf("failed to load FSM: %v", err))
+	}
+
+	// === Phase 10: Event Handlers ===
 	// Auto-register event handlers from World systems
 	for _, sys := range world.Systems() {
-		if handler, ok := sys.(events.Handler[*engine.World]); ok {
+		if handler, ok := sys.(events.Handler); ok {
 			clockScheduler.RegisterEventHandler(handler)
 		}
 	}
-	clockScheduler.RegisterEventHandler(clockScheduler)
 
 	// Meta/Audio systems (not in World.Systems - event-only, no Update logic)
 	metaSystem := systems.NewMetaSystem(ctx)
-	clockScheduler.RegisterEventHandler(metaSystem.(events.Handler[*engine.World]))
+	clockScheduler.RegisterEventHandler(metaSystem.(events.Handler))
 
 	audioSystem := systems.NewAudioSystem(world)
-	clockScheduler.RegisterEventHandler(audioSystem.(events.Handler[*engine.World]))
+	clockScheduler.RegisterEventHandler(audioSystem.(events.Handler))
+
+	// === PHASE 10: Main Loop ===
+	// Signal initial frame ready
+	frameReady <- struct{}{}
 
 	clockScheduler.Start()
 	defer clockScheduler.Stop()
 
-	// === PHASE 9: Main Loop ===
 	// Cache FPS metric pointer for render loop
 	statusReg := engine.MustGetResource[*status.Registry](ctx.World.Resources)
 	statFPS := statusReg.Ints.Get("engine.fps")
