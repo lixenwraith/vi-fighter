@@ -9,16 +9,6 @@ const (
 	// Consumer: AudioSystem | Payload: *SoundRequestPayload
 	EventSoundRequest EventType = iota
 
-	// EventCleanerRequest spawns cleaners on rows with Red characters
-	// Trigger: Gold sequence completed at max heat
-	// Consumer: CleanerSystem | Payload: nil
-	EventCleanerRequest
-
-	// EventDirectionalCleanerRequest spawns 4-way cleaners from origin
-	// Trigger: Nugget collected at max heat, Enter in Normal mode with heat >= 10
-	// Consumer: CleanerSystem | Payload: *DirectionalCleanerPayload
-	EventDirectionalCleanerRequest
-
 	// EventNuggetCollected signals nugget was collected by player
 	// Trigger: EnergySystem on successful nugget character match
 	// Consumer: NuggetSystem | Payload: *NuggetCollectedPayload
@@ -34,9 +24,20 @@ const (
 	// Consumer: NuggetSystem | Payload: nil
 	EventNuggetJumpRequest
 
-	// EventCleanerFinished marks cleaner animation completion
-	// Trigger: All cleaner entities destroyed | Payload: nil
-	EventCleanerFinished
+	// EventGoldEnable signals whether gold sequence spawning is allowed
+	// Trigger: FSM entering/exiting Normal state
+	// Consumer: GoldSystem | Payload: *GoldEnablePayload
+	EventGoldEnable
+
+	// EventGoldSpawnRequest signals a specific request to try spawning a gold sequence
+	// Trigger: FSM State Action
+	// Consumer: GoldSystem | Payload: nil
+	EventGoldSpawnRequest
+
+	// EventGoldSpawnFailed signals that a requested spawn could not be completed (e.g. no space)
+	// Trigger: GoldSystem
+	// Consumer: FSM (to return to Normal/Wait) | Payload: nil
+	EventGoldSpawnFailed
 
 	// EventGoldSpawned signals gold sequence creation
 	// Trigger: GoldSystem spawns sequence in PhaseNormal
@@ -55,6 +56,25 @@ const (
 	// EventGoldDestroyed signals external gold destruction (e.g., Drain)
 	// Payload: *GoldCompletionPayload
 	EventGoldDestroyed
+
+	// EventDirectionalCleanerRequest spawns 4-way cleaners from origin
+	// Trigger: Nugget collected at max heat, Enter in Normal mode with heat >= 10
+	// Consumer: CleanerSystem | Payload: *DirectionalCleanerPayload
+	EventDirectionalCleanerRequest
+
+	// EventManualCleanerTrigger signals player request to use cleaner ability (consumes heat)
+	// Trigger: Enter key in Insert/Normal mode
+	// Consumer: HeatSystem | Payload: nil
+	EventManualCleanerTrigger
+
+	// EventCleanerRequest spawns cleaners on rows with Red characters
+	// Trigger: Gold sequence completed at max heat
+	// Consumer: CleanerSystem | Payload: nil
+	EventCleanerRequest
+
+	// EventCleanerFinished marks cleaner animation completion
+	// Trigger: All cleaner entities destroyed | Payload: nil
+	EventCleanerFinished
 
 	// EventCharacterTyped signals Insert mode keypress
 	// Trigger: InputHandler on printable key
@@ -96,11 +116,6 @@ const (
 	// Trigger: Gold complete, debug command, boost command, error reset
 	// Consumer: HeatSystem | Payload: *HeatSetPayload
 	EventHeatSet
-
-	// EventManualCleanerTrigger signals player request to use cleaner ability (consumes heat)
-	// Trigger: Enter key in Insert/Normal mode
-	// Consumer: HeatSystem | Payload: nil
-	EventManualCleanerTrigger
 
 	// EventShieldActivate signals shield should become active
 	// Trigger: EnergySystem when energy > 0 and shield inactive
@@ -183,19 +198,24 @@ const (
 	EventFlashRequest
 
 	// EventDecayStart signals decay timer expired and animation should begin
-	// Trigger: DecaySystem timer expiration
-	// Consumer: (internal to DecaySystem) | Payload: nil
+	// Trigger: FSM entering DecayAnimation state
+	// Consumer: DecaySystem | Payload: nil
 	EventDecayStart
+
+	// EventDecayCancel signals that the decay phase should be aborted immediately
+	// Trigger: Game reset, Phase change interruption
+	// Consumer: DecaySystem | Payload: nil
+	EventDecayCancel
 
 	// EventDecayComplete signals all decay entities destroyed
 	// Trigger: DecaySystem when entity count reaches zero
 	// Consumer: ClockScheduler | Payload: nil
 	EventDecayComplete
 
-	// EventPhaseChange broadcasts global phase transition
-	// Trigger: ClockScheduler reacting to system events
-	// Consumer: SpawnSystem, DecaySystem | Payload: *PhaseChangePayload
-	EventPhaseChange
+	// EventRequestDeath signals intent to destroy game entities
+	// Trigger: Game systems (Energy, Drain, Decay, Cleaner, etc.)
+	// Consumer: DeathSystem | Payload: *DeathRequestPayload
+	EventRequestDeath
 )
 
 // GameEvent represents a single game event with metadata

@@ -74,6 +74,7 @@ type CodeBlock struct {
 
 // SpawnSystem handles character sequence generation and spawning
 type SpawnSystem struct {
+	mu    sync.RWMutex
 	world *engine.World
 	res   engine.CoreResources
 
@@ -104,9 +105,8 @@ type SpawnSystem struct {
 }
 
 // NewSpawnSystem creates a new spawn system
-func NewSpawnSystem(world *engine.World) *SpawnSystem {
+func NewSpawnSystem(world *engine.World) engine.System {
 	res := engine.GetCoreResources(world)
-	now := res.Time.GameTime
 
 	s := &SpawnSystem{
 		world: world,
@@ -115,23 +115,11 @@ func NewSpawnSystem(world *engine.World) *SpawnSystem {
 		seqStore:  engine.GetStore[components.SequenceComponent](world),
 		charStore: engine.GetStore[components.CharacterComponent](world),
 
-		// Initialize spawn state
-		enabled:        true, // Default enabled, future FSM will control
-		lastSpawnTime:  now,
-		nextSpawnTime:  now,
-		rateMultiplier: 1.0,
-
 		// Cache metric pointers
 		statEnabled:  res.Status.Bools.Get("spawn.enabled"),
 		statDensity:  res.Status.Floats.Get("spawn.density"),
 		statRateMult: res.Status.Floats.Get("spawn.rate_mult"),
 	}
-
-	// Initialize content management atomics (not game state)
-	s.isRefreshing.Store(false)
-	s.nextBlockIndex.Store(0)
-	s.totalBlocks.Store(0)
-	s.blocksConsumed.Store(0)
 
 	// Initialize ContentManager
 	s.contentManager = content.NewContentManager()
@@ -151,7 +139,26 @@ func NewSpawnSystem(world *engine.World) *SpawnSystem {
 	// Load initial content
 	s.loadContentFromManager()
 
+	s.initLocked()
 	return s
+}
+
+// Init resets session state for new game
+func (s *SpawnSystem) Init() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+}
+
+// initLocked performs session state reset, caller must hold s.mu
+func (s *SpawnSystem) initLocked() {
+	s.enabled = true
+	s.lastSpawnTime = time.Time{}
+	s.nextSpawnTime = time.Time{}
+	s.rateMultiplier = 1.0
+	s.nextBlockIndex.Store(0)
+	s.blocksConsumed.Store(0)
+	s.isRefreshing.Store(false)
 }
 
 // Priority returns the system's priority
@@ -163,13 +170,12 @@ func (s *SpawnSystem) Priority() int {
 func (s *SpawnSystem) EventTypes() []events.EventType {
 	return []events.EventType{
 		events.EventSpawnChange,
-		events.EventPhaseChange,
 		events.EventGameReset,
 	}
 }
 
 // HandleEvent processes spawn configuration events
-func (s *SpawnSystem) HandleEvent(world *engine.World, event events.GameEvent) {
+func (s *SpawnSystem) HandleEvent(event events.GameEvent) {
 	switch event.Type {
 	case events.EventSpawnChange:
 		if payload, ok := event.Payload.(*events.SpawnChangePayload); ok {
@@ -177,24 +183,15 @@ func (s *SpawnSystem) HandleEvent(world *engine.World, event events.GameEvent) {
 			s.statEnabled.Store(payload.Enabled)
 		}
 
-	case events.EventPhaseChange:
-		// TODO: Future FSM integration
-		// if payload, ok := event.Payload.(*events.PhaseChangePayload); ok {
-		//     s.enabled = payload.NewPhase == int(engine.PhaseNormal)
-		// }
-
 	case events.EventGameReset:
-		now := s.res.Time.GameTime
-		s.lastSpawnTime = now
-		s.nextSpawnTime = now
-		s.rateMultiplier = 1.0
+		s.Init()
 		s.statRateMult.Set(1.0)
 		s.statDensity.Set(0.0)
 	}
 }
 
 // Update runs the spawn system logic
-func (s *SpawnSystem) Update(world *engine.World, dt time.Duration) {
+func (s *SpawnSystem) Update() {
 	now := s.res.Time.GameTime
 	config := s.res.Config
 
@@ -204,7 +201,7 @@ func (s *SpawnSystem) Update(world *engine.World, dt time.Duration) {
 	}
 
 	// Calculate current density and update rate multiplier
-	entityCount := world.Positions.Count()
+	entityCount := s.world.Positions.Count()
 	screenCapacity := config.GameWidth * config.GameHeight
 	density := s.calculateDensity(entityCount, screenCapacity)
 	s.updateRateMultiplier(density)
@@ -219,10 +216,10 @@ func (s *SpawnSystem) Update(world *engine.World, dt time.Duration) {
 	}
 
 	// Generate and spawn a new sequence
-	s.spawnSequence(world)
+	s.spawnSequence()
 
 	// Schedule next spawn
-	s.scheduleNextSpawn(now)
+	s.scheduleNextSpawn()
 }
 
 // calculateDensity returns entity density as fraction of screen capacity
@@ -246,7 +243,8 @@ func (s *SpawnSystem) updateRateMultiplier(density float64) {
 }
 
 // scheduleNextSpawn calculates and sets the next spawn time
-func (s *SpawnSystem) scheduleNextSpawn(now time.Time) {
+func (s *SpawnSystem) scheduleNextSpawn() {
+	now := s.res.Time.GameTime
 	baseDelay := time.Duration(constants.SpawnIntervalMs) * time.Millisecond
 	adjustedDelay := time.Duration(float64(baseDelay) / s.rateMultiplier)
 
@@ -434,7 +432,7 @@ func (s *SpawnSystem) hasBracesInBlock(lines []string) bool {
 
 // runCensus iterates all sequence entities and counts colors
 // Called once per spawn check, O(n) where n ≈ 200 max entities
-func (s *SpawnSystem) runCensus(world *engine.World) ColorCensus {
+func (s *SpawnSystem) runCensus() ColorCensus {
 	var census ColorCensus
 
 	entities := s.seqStore.All()
@@ -510,9 +508,9 @@ func (s *SpawnSystem) getAvailableColorsFromCensus(census ColorCensus) []ColorLe
 }
 
 // spawnSequence generates and spawns a new character block from file
-func (s *SpawnSystem) spawnSequence(world *engine.World) {
+func (s *SpawnSystem) spawnSequence() {
 	// Census for color counters
-	census := s.runCensus(world)
+	census := s.runCensus()
 	availableColors := s.getAvailableColorsFromCensus(census)
 
 	if len(availableColors) == 0 {
@@ -544,7 +542,7 @@ func (s *SpawnSystem) spawnSequence(world *engine.World) {
 	// Try to place each line from the block on the screen
 	placedCount := 0
 	for _, line := range block.Lines {
-		if s.placeLine(world, line, seqType, seqLevel) {
+		if s.placeLine(line, seqType, seqLevel) {
 			placedCount++
 		}
 	}
@@ -616,7 +614,7 @@ func (s *SpawnSystem) getNextBlock() CodeBlock {
 
 // placeLine attempts to place a single line on the screen using generic stores
 // Lines exceeding GameWidth are cropped to fit available space
-func (s *SpawnSystem) placeLine(world *engine.World, line string, seqType components.SequenceType, seqLevel components.SequenceLevel) bool {
+func (s *SpawnSystem) placeLine(line string, seqType components.SequenceType, seqLevel components.SequenceLevel) bool {
 	config := s.res.Config
 	cursorEntity := s.res.Cursor.Entity
 
@@ -656,14 +654,14 @@ func (s *SpawnSystem) placeLine(world *engine.World, line string, seqType compon
 		// Check for overlaps using HasAny
 		hasOverlap := false
 		for i := 0; i < lineLength; i++ {
-			if world.Positions.HasAny(startCol+i, row) {
+			if s.world.Positions.HasAny(startCol+i, row) {
 				hasOverlap = true
 				break
 			}
 		}
 
 		// Check if too close to cursor
-		cursorPos, ok := world.Positions.Get(cursorEntity)
+		cursorPos, ok := s.world.Positions.Get(cursorEntity)
 		if !ok {
 			panic(fmt.Errorf("cursor destroyed"))
 		}
@@ -698,7 +696,7 @@ func (s *SpawnSystem) placeLine(world *engine.World, line string, seqType compon
 					continue
 				}
 
-				entity := world.CreateEntity()
+				entity := s.world.CreateEntity()
 				entities = append(entities, entityData{
 					entity: entity,
 					pos: components.PositionComponent{
@@ -722,7 +720,7 @@ func (s *SpawnSystem) placeLine(world *engine.World, line string, seqType compon
 			}
 
 			// Phase 2: Batch position validation and commit
-			batch := world.Positions.BeginBatch()
+			batch := s.world.Positions.BeginBatch()
 			for _, ed := range entities {
 				batch.Add(ed.entity, ed.pos)
 			}
@@ -730,7 +728,7 @@ func (s *SpawnSystem) placeLine(world *engine.World, line string, seqType compon
 			if err := batch.Commit(); err != nil {
 				// Collision detected - cleanup entities and try next attempt
 				for _, ed := range entities {
-					world.DestroyEntity(ed.entity)
+					s.world.DestroyEntity(ed.entity)
 				}
 				continue
 			}

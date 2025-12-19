@@ -3,8 +3,6 @@ package systems
 import (
 	"math/rand"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/lixenwraith/vi-fighter/components"
 	"github.com/lixenwraith/vi-fighter/constants"
@@ -15,50 +13,58 @@ import (
 
 // DecaySystem handles character decay animation and logic
 type DecaySystem struct {
+	mu    sync.RWMutex
 	world *engine.World
 	res   engine.CoreResources
 
 	decayStore  *engine.Store[components.DecayComponent]
 	protStore   *engine.Store[components.ProtectionComponent]
-	heatStore   *engine.Store[components.HeatComponent]
+	deathStore  *engine.Store[components.DeathComponent]
 	nuggetStore *engine.Store[components.NuggetComponent]
 	charStore   *engine.Store[components.CharacterComponent]
 	seqStore    *engine.Store[components.SequenceComponent]
 
-	// Internal state
-	mu          sync.RWMutex
-	timerActive bool
-	nextTime    time.Time
-	animating   bool
-	startTime   time.Time
+	// State
+	animating bool
 
 	// Per-frame tracking
-	currentRow         int
 	decayedThisFrame   map[core.Entity]bool
 	processedGridCells map[int]bool // Key is flat index: (y * gameWidth) + x
-
-	// Cached metric pointers
-	statTimer *atomic.Int64
 }
 
 // NewDecaySystem creates a new decay system
 func NewDecaySystem(world *engine.World) engine.System {
 	res := engine.GetCoreResources(world)
-	return &DecaySystem{
+	s := &DecaySystem{
 		world: world,
 		res:   res,
 
-		decayStore:       engine.GetStore[components.DecayComponent](world),
-		protStore:        engine.GetStore[components.ProtectionComponent](world),
-		heatStore:        engine.GetStore[components.HeatComponent](world),
-		nuggetStore:      engine.GetStore[components.NuggetComponent](world),
-		charStore:        engine.GetStore[components.CharacterComponent](world),
-		seqStore:         engine.GetStore[components.SequenceComponent](world),
-		decayedThisFrame: make(map[core.Entity]bool),
+		decayStore:  engine.GetStore[components.DecayComponent](world),
+		protStore:   engine.GetStore[components.ProtectionComponent](world),
+		deathStore:  engine.GetStore[components.DeathComponent](world),
+		nuggetStore: engine.GetStore[components.NuggetComponent](world),
+		charStore:   engine.GetStore[components.CharacterComponent](world),
+		seqStore:    engine.GetStore[components.SequenceComponent](world),
 
+		decayedThisFrame:   make(map[core.Entity]bool),
 		processedGridCells: make(map[int]bool),
-		statTimer:          res.Status.Ints.Get("decay.timer"),
 	}
+	s.initLocked()
+	return s
+}
+
+// Init resets session state for new game
+func (s *DecaySystem) Init() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+}
+
+// initLocked performs session state reset, caller must hold s.mu
+func (s *DecaySystem) initLocked() {
+	s.animating = false
+	clear(s.decayedThisFrame)
+	clear(s.processedGridCells)
 }
 
 // Priority returns the system's priority
@@ -69,131 +75,61 @@ func (s *DecaySystem) Priority() int {
 // EventTypes returns the event types DecaySystem handles
 func (s *DecaySystem) EventTypes() []events.EventType {
 	return []events.EventType{
-		events.EventPhaseChange,
+		events.EventDecayStart,
+		events.EventDecayCancel,
+		events.EventGameReset,
 	}
 }
 
 // HandleEvent processes decay-related events
-func (s *DecaySystem) HandleEvent(world *engine.World, event events.GameEvent) {
-	if event.Type == events.EventPhaseChange {
-		if payload, ok := event.Payload.(*events.PhaseChangePayload); ok {
-			if payload.NewPhase == int(engine.PhaseDecayWait) {
-				s.startDecayTimer(world)
-			}
-		}
-	} else if event.Type == events.EventGameReset {
-		s.mu.Lock()
-		s.timerActive = false
-		s.animating = false
-		s.nextTime = time.Time{}
-		s.startTime = time.Time{}
-		s.currentRow = 0
-		clear(s.decayedThisFrame)
-		clear(s.processedGridCells)
-		s.mu.Unlock()
+func (s *DecaySystem) HandleEvent(event events.GameEvent) {
+	switch event.Type {
+	case events.EventDecayStart:
+		s.spawnDecayEntities()
 
-		s.statTimer.Store(0)
+	case events.EventDecayCancel:
+		s.despawnDecayEntities()
+
+	case events.EventGameReset:
+		s.Init()
 	}
 }
 
 // Update runs the decay system logic
-func (s *DecaySystem) Update(world *engine.World, dt time.Duration) {
-	now := s.res.Time.GameTime
-
-	s.mu.Lock()
-	timerActive := s.timerActive
-	nextTime := s.nextTime
+func (s *DecaySystem) Update() {
+	s.mu.RLock()
 	animating := s.animating
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
-	// Publish timer remaining (direct atomic write)
-	if timerActive {
-		remaining := nextTime.Sub(now)
-		if remaining < 0 {
-			remaining = 0
-		}
-		s.statTimer.Store(int64(remaining))
-	} else if animating {
-		s.statTimer.Store(0)
-	}
-
-	// Timer expiration check
-	if timerActive && now.After(nextTime) {
-		s.triggerAnimation(world, now)
+	if !animating {
 		return
 	}
 
-	// Animation update
-	if animating {
-		s.updateAnimation(world, dt)
-	}
-}
+	s.updateDecayEntities()
 
-// startDecayTimer calculates interval based on heat and starts timer
-func (s *DecaySystem) startDecayTimer(world *engine.World) {
-	heatValue := 0
-	if hc, ok := s.heatStore.Get(s.res.Cursor.Entity); ok {
-		heatValue = int(hc.Current.Load())
-	}
-
-	// Heat-based interval calculation
-	heatPercentage := float64(heatValue) / float64(constants.MaxHeat)
-	if heatPercentage > 1.0 {
-		heatPercentage = 1.0
-	}
-	if heatPercentage < 0.0 {
-		heatPercentage = 0.0
-	}
-
-	intervalSeconds := constants.DecayIntervalBaseSeconds - constants.DecayIntervalRangeSeconds*heatPercentage
-	interval := time.Duration(intervalSeconds * float64(time.Second))
-
-	s.mu.Lock()
-	// TODO: check if `now` should be in mutex
-	now := s.res.Time.GameTime
-	s.timerActive = true
-	s.nextTime = now.Add(interval)
-	s.mu.Unlock()
-}
-
-// triggerAnimation starts decay animation
-func (s *DecaySystem) triggerAnimation(world *engine.World, now time.Time) {
-	s.mu.Lock()
-	s.timerActive = false
-	s.animating = true
-	s.startTime = now
-	s.currentRow = 0
-	clear(s.decayedThisFrame)
-	s.mu.Unlock()
-
-	s.spawnDecayEntities(world)
-	world.PushEvent(events.EventDecayStart, nil)
-}
-
-// updateAnimation progresses the decay animation
-func (s *DecaySystem) updateAnimation(world *engine.World, dt time.Duration) {
-	// Use Delta Time (dt) for physics integration
-	s.updateDecayEntities(world, dt.Seconds())
-
-	// Check entity count from the Store to prevents "Zombie Phase" by ensuring phase ends exactly when entities are gone
+	// When there are no decay entities, emit EventDecayComplete once
 	count := s.decayStore.Count()
 	if count == 0 {
 		s.mu.Lock()
-		s.currentRow = 0
-		s.animating = false
-		s.startTime = time.Time{}
+		// Double check inside lock to ensure we only fire once
+		shouldEmit := s.animating
 		s.mu.Unlock()
 
-		s.statTimer.Store(0)
-
-		// Ensure cleanup of any artifacts
-		s.cleanupDecayEntities(world)
-		world.PushEvent(events.EventDecayComplete, nil)
+		if shouldEmit {
+			// Reuse despawn to reset state/flags; entity loop is no-op here since count is 0
+			s.despawnDecayEntities()
+			s.world.PushEvent(events.EventDecayComplete, nil)
+		}
 	}
 }
 
 // spawnDecayEntities creates one decay entity per column
-func (s *DecaySystem) spawnDecayEntities(world *engine.World) {
+func (s *DecaySystem) spawnDecayEntities() {
+	s.mu.Lock()
+	s.animating = true
+	clear(s.decayedThisFrame)
+	s.mu.Unlock()
+
 	gameWidth := s.res.Config.GameWidth
 
 	// Spawn one decay entity per column for full-width coverage
@@ -201,9 +137,9 @@ func (s *DecaySystem) spawnDecayEntities(world *engine.World) {
 		speed := constants.DecayMinSpeed + rand.Float64()*(constants.DecayMaxSpeed-constants.DecayMinSpeed)
 		char := constants.AlphanumericRunes[rand.Intn(len(constants.AlphanumericRunes))]
 
-		entity := world.CreateEntity()
+		entity := s.world.CreateEntity()
 
-		world.Positions.Add(entity, components.PositionComponent{X: column, Y: 0})
+		s.world.Positions.Add(entity, components.PositionComponent{X: column, Y: 0})
 		// Initialize DecayComponent with PreciseX/Y float overlay and coordinate history
 		s.decayStore.Add(entity, components.DecayComponent{
 			PreciseX:      float64(column),
@@ -220,7 +156,8 @@ func (s *DecaySystem) spawnDecayEntities(world *engine.World) {
 }
 
 // updateDecayEntities updates entity positions and applies decay
-func (s *DecaySystem) updateDecayEntities(world *engine.World, dtSeconds float64) {
+func (s *DecaySystem) updateDecayEntities() {
+	dtSeconds := s.res.Time.DeltaTime.Seconds()
 	gameHeight := s.res.Config.GameHeight
 	gameWidth := s.res.Config.GameWidth
 
@@ -243,7 +180,7 @@ func (s *DecaySystem) updateDecayEntities(world *engine.World, dtSeconds float64
 			continue
 		}
 
-		pos, hasPos := world.Positions.Get(entity)
+		pos, hasPos := s.world.Positions.Get(entity)
 		if !hasPos {
 			continue
 		}
@@ -255,7 +192,7 @@ func (s *DecaySystem) updateDecayEntities(world *engine.World, dtSeconds float64
 
 		// Destroy if entity falls below game area
 		if fall.PreciseY >= float64(gameHeight) {
-			world.DestroyEntity(entity)
+			s.world.DestroyEntity(entity)
 			continue
 		}
 
@@ -293,7 +230,7 @@ func (s *DecaySystem) updateDecayEntities(world *engine.World, dtSeconds float64
 			}
 
 			// Query entities at position using zero-alloc buffer
-			n := world.Positions.GetAllAtInto(col, row, collisionBuf[:])
+			n := s.world.Positions.GetAllAtInto(col, row, collisionBuf[:])
 
 			// Process collisions with self-exclusion
 			for i := 0; i < n; i++ {
@@ -312,18 +249,16 @@ func (s *DecaySystem) updateDecayEntities(world *engine.World, dtSeconds float64
 				}
 
 				if s.nuggetStore.Has(targetEntity) {
-					if char, ok := s.charStore.Get(targetEntity); ok {
-						world.PushEvent(events.EventFlashRequest, &events.FlashRequestPayload{
-							X: col, Y: row, Char: char.Rune,
-						})
-					}
 					// Signal nugget destruction to NuggetSystem
-					world.PushEvent(events.EventNuggetDestroyed, &events.NuggetDestroyedPayload{
+					s.world.PushEvent(events.EventNuggetDestroyed, &events.NuggetDestroyedPayload{
 						Entity: targetEntity,
 					})
-					world.DestroyEntity(targetEntity)
+					s.world.PushEvent(events.EventRequestDeath, &events.DeathRequestPayload{
+						Entities:    []core.Entity{targetEntity},
+						EffectEvent: events.EventFlashRequest,
+					})
 				} else {
-					s.applyDecayToCharacter(world, targetEntity)
+					s.applyDecayToCharacter(targetEntity)
 				}
 
 				s.mu.Lock()
@@ -352,7 +287,7 @@ func (s *DecaySystem) updateDecayEntities(world *engine.World, dtSeconds float64
 		// Grid Sync Protocol: Update PositionStore if integer position changed
 		newGridY := int(fall.PreciseY)
 		if newGridY != pos.Y {
-			world.Positions.Add(entity, components.PositionComponent{X: pos.X, Y: newGridY})
+			s.world.Positions.Add(entity, components.PositionComponent{X: pos.X, Y: newGridY})
 		}
 
 		s.decayStore.Add(entity, fall)
@@ -360,7 +295,7 @@ func (s *DecaySystem) updateDecayEntities(world *engine.World, dtSeconds float64
 }
 
 // applyDecayToCharacter applies decay logic to a single character entity
-func (s *DecaySystem) applyDecayToCharacter(world *engine.World, entity core.Entity) {
+func (s *DecaySystem) applyDecayToCharacter(entity core.Entity) {
 	seq, ok := s.seqStore.Get(entity)
 	if !ok {
 		return
@@ -406,27 +341,27 @@ func (s *DecaySystem) applyDecayToCharacter(world *engine.World, entity core.Ent
 				s.charStore.Add(entity, char)
 			}
 		} else {
-			// Red at LevelDark - spawn flash then remove entity
-			if pos, ok := world.Positions.Get(entity); ok {
-				if char, ok := s.charStore.Get(entity); ok {
-					world.PushEvent(events.EventFlashRequest, &events.FlashRequestPayload{
-						X: pos.X, Y: pos.Y, Char: char.Rune,
-					})
-				}
-			}
-			world.DestroyEntity(entity)
+			// Red at LevelDark - death with flash
+			s.world.PushEvent(events.EventRequestDeath, &events.DeathRequestPayload{
+				Entities:    []core.Entity{entity},
+				EffectEvent: events.EventFlashRequest,
+			})
 		}
 	}
 }
 
-// cleanupDecayEntities removes all decay entities
-func (s *DecaySystem) cleanupDecayEntities(world *engine.World) {
+// despawnDecayEntities marks all decay entities for death
+func (s *DecaySystem) despawnDecayEntities() {
+	s.mu.Lock()
+	s.animating = false // Stop processing updates immediately
+	clear(s.decayedThisFrame)
+	clear(s.processedGridCells) // Reset frame state
+	s.mu.Unlock()
+
+	// Mark all existing decay entities for death
+	// We use MarkedForDeath to allow CullSystem to clean them up properly in the same frame
 	entities := s.decayStore.All()
 	for _, entity := range entities {
-		world.DestroyEntity(entity)
+		s.deathStore.Add(entity, components.DeathComponent{})
 	}
-
-	s.mu.Lock()
-	clear(s.decayedThisFrame)
-	s.mu.Unlock()
 }

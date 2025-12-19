@@ -46,7 +46,7 @@ type GoldSystem struct {
 // NewGoldSystem creates a new gold sequence system
 func NewGoldSystem(world *engine.World) engine.System {
 	res := engine.GetCoreResources(world)
-	return &GoldSystem{
+	s := &GoldSystem{
 		world: world,
 		res:   res,
 
@@ -55,12 +55,29 @@ func NewGoldSystem(world *engine.World) engine.System {
 		charStore: engine.GetStore[components.CharacterComponent](world),
 		protStore: engine.GetStore[components.ProtectionComponent](world),
 
-		nextSeqID:    1,
-		spawnEnabled: true,
-		statActive:   res.Status.Bools.Get("gold.active"),
-		statSeqID:    res.Status.Ints.Get("gold.seq_id"),
-		statTimer:    res.Status.Ints.Get("gold.timer"),
+		nextSeqID:  1,
+		statActive: res.Status.Bools.Get("gold.active"),
+		statSeqID:  res.Status.Ints.Get("gold.seq_id"),
+		statTimer:  res.Status.Ints.Get("gold.timer"),
 	}
+	s.initLocked()
+	return s
+}
+
+// Init resets session state for new game
+func (s *GoldSystem) Init() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+}
+
+// initLocked performs session state reset, caller must hold s.mu
+func (s *GoldSystem) initLocked() {
+	s.active = false
+	s.sequenceID = 0
+	s.startTime = time.Time{}
+	s.timeoutTime = time.Time{}
+	s.spawnEnabled = true
 }
 
 // Priority returns the system's priority
@@ -71,40 +88,54 @@ func (s *GoldSystem) Priority() int {
 // EventTypes returns the event types GoldSystem handles
 func (s *GoldSystem) EventTypes() []events.EventType {
 	return []events.EventType{
+		events.EventGoldEnable,
+		events.EventGoldSpawnRequest,
 		events.EventGoldComplete,
 		events.EventGoldDestroyed,
-		events.EventPhaseChange,
 		events.EventGameReset,
 	}
 }
 
 // HandleEvent processes gold events
-func (s *GoldSystem) HandleEvent(world *engine.World, event events.GameEvent) {
+func (s *GoldSystem) HandleEvent(event events.GameEvent) {
 	switch event.Type {
+	case events.EventGoldSpawnRequest:
+		s.mu.RLock()
+		enabled := s.spawnEnabled
+		active := s.active
+		s.mu.RUnlock()
+
+		if !enabled || active {
+			s.world.PushEvent(events.EventGoldSpawnFailed, nil)
+			return
+		}
+
+		if s.spawnGold() {
+			// EventGoldSpawned emitted inside spawnGold
+		} else {
+			s.world.PushEvent(events.EventGoldSpawnFailed, nil)
+		}
+
 	case events.EventGoldComplete:
 		if payload, ok := event.Payload.(*events.GoldCompletionPayload); ok {
-			s.handleCompletion(world, payload.SequenceID)
+			s.handleCompletion(s.world, payload.SequenceID)
 		}
 
 	case events.EventGoldDestroyed:
 		if payload, ok := event.Payload.(*events.GoldCompletionPayload); ok {
-			s.handleDestroyed(world, payload.SequenceID)
+			s.handleDestroyed(s.world, payload.SequenceID)
 		}
 
-	case events.EventPhaseChange:
-		if payload, ok := event.Payload.(*events.PhaseChangePayload); ok {
+		// TODO: implement enabled event for all systems
+	case events.EventGoldEnable:
+		if payload, ok := event.Payload.(*events.GoldEnablePayload); ok {
 			s.mu.Lock()
-			s.spawnEnabled = payload.NewPhase == int(engine.PhaseNormal)
+			s.spawnEnabled = payload.Enabled
 			s.mu.Unlock()
 		}
 
 	case events.EventGameReset:
-		s.mu.Lock()
-		s.active = false
-		s.sequenceID = 0
-		s.startTime = time.Time{}
-		s.timeoutTime = time.Time{}
-		s.mu.Unlock()
+		s.Init()
 
 		s.statActive.Store(false)
 		s.statSeqID.Store(0)
@@ -113,14 +144,13 @@ func (s *GoldSystem) HandleEvent(world *engine.World, event events.GameEvent) {
 }
 
 // Update runs the gold sequence system logic
-func (s *GoldSystem) Update(world *engine.World, dt time.Duration) {
+func (s *GoldSystem) Update() {
 	now := s.res.Time.GameTime
 
 	s.mu.Lock()
 	active := s.active
 	timeoutTime := s.timeoutTime
 	seqID := s.sequenceID
-	canSpawn := s.spawnEnabled
 	s.mu.Unlock()
 
 	// Publish metrics (direct atomic writes)
@@ -138,26 +168,13 @@ func (s *GoldSystem) Update(world *engine.World, dt time.Duration) {
 
 	// Timeout check
 	if active && now.After(timeoutTime) {
-		s.failSequence(world, seqID, true)
-		return
-	}
-
-	// Spawn check
-	if canSpawn && !active {
-		s.spawnGold(world)
+		s.failSequence(seqID, true)
 	}
 }
 
 // spawnGold creates a new gold sequence
-func (s *GoldSystem) spawnGold(world *engine.World) bool {
+func (s *GoldSystem) spawnGold() bool {
 	now := s.res.Time.GameTime
-
-	s.mu.Lock()
-	if s.active {
-		s.mu.Unlock()
-		return false
-	}
-	s.mu.Unlock() // Unlock before expensive operation
 
 	// Generate random 10-character sequence
 	sequence := make([]rune, constants.GoldSequenceLength)
@@ -166,7 +183,7 @@ func (s *GoldSystem) spawnGold(world *engine.World) bool {
 	}
 
 	// Caller must NOT hold s.mu lock
-	x, y := s.findValidPosition(world, constants.GoldSequenceLength)
+	x, y := s.findValidPosition(constants.GoldSequenceLength)
 
 	if x < 0 || y < 0 {
 		return false
@@ -189,7 +206,7 @@ func (s *GoldSystem) spawnGold(world *engine.World) bool {
 	entities := make([]entityData, 0, constants.GoldSequenceLength)
 
 	for i := 0; i < constants.GoldSequenceLength; i++ {
-		entity := world.CreateEntity()
+		entity := s.world.CreateEntity()
 		entities = append(entities, entityData{
 			entity: entity,
 			pos:    components.PositionComponent{X: x + i, Y: y},
@@ -210,7 +227,7 @@ func (s *GoldSystem) spawnGold(world *engine.World) bool {
 	}
 
 	// Batch position commit
-	batch := world.Positions.BeginBatch()
+	batch := s.world.Positions.BeginBatch()
 	for _, ed := range entities {
 		batch.Add(ed.entity, ed.pos)
 	}
@@ -218,7 +235,7 @@ func (s *GoldSystem) spawnGold(world *engine.World) bool {
 	if err := batch.Commit(); err != nil {
 		// Collision detected - cleanup entities
 		for _, ed := range entities {
-			world.DestroyEntity(ed.entity)
+			s.world.DestroyEntity(ed.entity)
 		}
 		return false
 	}
@@ -236,14 +253,13 @@ func (s *GoldSystem) spawnGold(world *engine.World) bool {
 	// Activate internal state
 	s.mu.Lock()
 	s.active = true
-	s.spawnEnabled = false
 	s.sequenceID = sequenceID
 	s.startTime = now
 	s.timeoutTime = now.Add(constants.GoldDuration)
 	s.mu.Unlock()
 
 	// Emit spawn event
-	world.PushEvent(events.EventGoldSpawned, &events.GoldSpawnedPayload{
+	s.world.PushEvent(events.EventGoldSpawned, &events.GoldSpawnedPayload{
 		SequenceID: sequenceID,
 		OriginX:    x,
 		OriginY:    y,
@@ -255,7 +271,7 @@ func (s *GoldSystem) spawnGold(world *engine.World) bool {
 }
 
 // removeGold removes all gold sequence entities
-func (s *GoldSystem) removeGold(world *engine.World, sequenceID int) {
+func (s *GoldSystem) removeGold(sequenceID int) {
 	s.mu.RLock()
 	if !s.active || sequenceID != s.sequenceID {
 		s.mu.RUnlock()
@@ -264,15 +280,23 @@ func (s *GoldSystem) removeGold(world *engine.World, sequenceID int) {
 	s.mu.RUnlock()
 
 	entities := s.seqStore.All()
+	var toDestroy []core.Entity
 	for _, entity := range entities {
 		seq, ok := s.seqStore.Get(entity)
 		if !ok {
 			continue
 		}
 		// Only remove gold sequence entities with provided ID
-		if seq.Type == components.SequenceGold && seq.ID == sequenceID {
-			world.DestroyEntity(entity)
+		if seq.Type == components.SequenceGold && (sequenceID == 0 || seq.ID == sequenceID) {
+			toDestroy = append(toDestroy, entity)
 		}
+	}
+
+	if len(toDestroy) > 0 {
+		s.world.PushEvent(events.EventRequestDeath, &events.DeathRequestPayload{
+			Entities:    toDestroy,
+			EffectEvent: 0,
+		})
 	}
 
 	s.mu.Lock()
@@ -286,7 +310,7 @@ func (s *GoldSystem) removeGold(world *engine.World, sequenceID int) {
 }
 
 // failSequence handles gold failure (timeout or destruction)
-func (s *GoldSystem) failSequence(world *engine.World, sequenceID int, isTimeout bool) {
+func (s *GoldSystem) failSequence(sequenceID int, isTimeout bool) {
 	s.mu.RLock()
 	if !s.active || sequenceID != s.sequenceID {
 		s.mu.RUnlock()
@@ -295,12 +319,12 @@ func (s *GoldSystem) failSequence(world *engine.World, sequenceID int, isTimeout
 	s.mu.RUnlock()
 
 	if isTimeout {
-		world.PushEvent(events.EventGoldTimeout, &events.GoldCompletionPayload{
+		s.world.PushEvent(events.EventGoldTimeout, &events.GoldCompletionPayload{
 			SequenceID: sequenceID,
 		})
 	}
 
-	s.removeGold(world, sequenceID)
+	s.removeGold(sequenceID)
 }
 
 // handleCompletion processes successful gold sequence
@@ -312,7 +336,7 @@ func (s *GoldSystem) handleCompletion(world *engine.World, sequenceID int) {
 	}
 	s.mu.RUnlock()
 
-	s.removeGold(world, sequenceID)
+	s.removeGold(sequenceID)
 
 	// Play sound
 	if audioRes, ok := engine.GetResource[*engine.AudioResource](world.Resources); ok && audioRes.Player != nil {
@@ -329,14 +353,14 @@ func (s *GoldSystem) handleDestroyed(world *engine.World, sequenceID int) {
 	}
 	s.mu.RUnlock()
 
-	s.removeGold(world, sequenceID)
+	s.removeGold(sequenceID)
 }
 
 // findValidPosition finds a valid random position for the gold sequence
 // Caller must NOT hold s.mu lock
-func (s *GoldSystem) findValidPosition(world *engine.World, seqLength int) (int, int) {
+func (s *GoldSystem) findValidPosition(seqLength int) (int, int) {
 	config := s.res.Config
-	cursorPos, ok := world.Positions.Get(s.res.Cursor.Entity)
+	cursorPos, ok := s.world.Positions.Get(s.res.Cursor.Entity)
 	if !ok {
 		return -1, -1
 	}
@@ -359,7 +383,7 @@ func (s *GoldSystem) findValidPosition(world *engine.World, seqLength int) (int,
 		// Check for overlaps with existing characters
 		overlaps := false
 		for i := 0; i < seqLength; i++ {
-			if world.Positions.HasAny(x+i, y) {
+			if s.world.Positions.HasAny(x+i, y) {
 				overlaps = true
 				break
 			}
