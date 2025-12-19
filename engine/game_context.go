@@ -51,6 +51,9 @@ type GameContext struct {
 	// Pausable Clock time provider
 	PausableClock *PausableClock
 
+	// FSM Reset channel, wired by main to ClockScheduler
+	ResetChan chan<- struct{}
+
 	// Screen dimensions
 	Width, Height int
 
@@ -335,10 +338,10 @@ func (ctx *GameContext) cleanupOutOfBoundsEntities(width, height int) {
 		// Mark entities outside valid coordinate space [0, width) × [0, height)
 		// We use OutOfBoundsComponent instead of immediate destruction to allow
 		// systems (like GoldSystem) to detect the loss and update GameState
-		deathStore := GetStore[components.MarkedForDeathComponent](ctx.World)
+		deathStore := GetStore[components.DeathComponent](ctx.World)
 		pos, _ := ctx.World.Positions.Get(e)
 		if pos.X >= width || pos.Y >= height || pos.X < 0 || pos.Y < 0 {
-			deathStore.Add(e, components.MarkedForDeathComponent{})
+			deathStore.Add(e, components.DeathComponent{})
 		}
 	}
 

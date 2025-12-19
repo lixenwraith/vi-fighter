@@ -24,7 +24,7 @@ func RegisterComponents(w *engine.World) {
 	engine.RegisterComponent[components.ShieldComponent](w)
 	engine.RegisterComponent[components.BoostComponent](w)
 	engine.RegisterComponent[components.SplashComponent](w)
-	engine.RegisterComponent[components.MarkedForDeathComponent](w)
+	engine.RegisterComponent[components.DeathComponent](w)
 	engine.RegisterComponent[components.TimerComponent](w)
 	engine.RegisterComponent[components.EnergyComponent](w)
 	engine.RegisterComponent[components.HeatComponent](w)
@@ -76,6 +76,9 @@ func RegisterSystems() {
 	})
 	registry.RegisterSystem("splash", func(w any) any {
 		return systems.NewSplashSystem(w.(*engine.World))
+	})
+	registry.RegisterSystem("death", func(w any) any {
+		return systems.NewDeathSystem(w.(*engine.World))
 	})
 	registry.RegisterSystem("timekeeper", func(w any) any {
 		return systems.NewTimeKeeperSystem(w.(*engine.World))
@@ -162,6 +165,7 @@ func ActiveSystems() []string {
 		"cleaner",
 		"flash",
 		"splash",
+		"death",
 		"timekeeper",
 		"cull",
 	}
