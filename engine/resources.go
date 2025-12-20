@@ -7,7 +7,8 @@ import (
 
 	"github.com/lixenwraith/vi-fighter/core"
 	"github.com/lixenwraith/vi-fighter/engine/status"
-	"github.com/lixenwraith/vi-fighter/events"
+	"github.com/lixenwraith/vi-fighter/event"
+	"github.com/lixenwraith/vi-fighter/terminal"
 )
 
 // ResourceStore is a thread-safe container for global game resources
@@ -65,7 +66,56 @@ func MustGetResource[T any](rs *ResourceStore) T {
 	return res
 }
 
-// --- Core Resources ---
+// === Cached Resources ===
+
+// Resources provides cached pointers to singleton resources
+// Initialized once per system to eliminate runtime map lookups
+type Resources struct {
+	// World Resources
+	Time   *TimeResource
+	Config *ConfigResource
+	State  *GameStateResource
+	Cursor *CursorResource
+	Events *EventQueueResource
+	ZIndex *ZIndexResolver
+
+	// Telemetry
+	Status *status.Registry
+
+	// Bridged resources from Services
+	Content *ContentResource
+	Audio   *AudioResource
+	Network *NetworkResource
+}
+
+// GetResources populates Resources from the world's resource store
+// Call once during system construction; pointers remain valid for application lifetime
+func GetResources(w *World) Resources {
+	res := Resources{
+		Time:   MustGetResource[*TimeResource](w.Resources),
+		Config: MustGetResource[*ConfigResource](w.Resources),
+		Cursor: MustGetResource[*CursorResource](w.Resources),
+		State:  MustGetResource[*GameStateResource](w.Resources),
+		Events: MustGetResource[*EventQueueResource](w.Resources),
+		Status: MustGetResource[*status.Registry](w.Resources),
+		ZIndex: MustGetResource[*ZIndexResolver](w.Resources),
+	}
+
+	// Bridged resources from services: fail-fast for required, graceful for optional
+	res.Content = MustGetResource[*ContentResource](w.Resources)
+
+	if audioRes, ok := GetResource[*AudioResource](w.Resources); ok && audioRes.Player != nil {
+		res.Audio = audioRes
+	}
+
+	if netRes, ok := GetResource[*NetworkResource](w.Resources); ok {
+		res.Network = netRes
+	}
+
+	return res
+}
+
+// === World Resources ===
 
 // TimeResource wraps time data for systems
 // It is updated by the GameContext/ClockScheduler at the start of a frame/tick
@@ -83,6 +133,15 @@ type TimeResource struct {
 	FrameNumber int64
 }
 
+// Update modifies TimeResource fields in-place (zero allocation)
+// Must be called under world lock to prevent races with system reads
+func (tr *TimeResource) Update(gameTime, realTime time.Time, deltaTime time.Duration, frameNumber int64) {
+	tr.GameTime = gameTime
+	tr.RealTime = realTime
+	tr.DeltaTime = deltaTime
+	tr.FrameNumber = frameNumber
+}
+
 // ConfigResource holds static or semi-static configuration data
 type ConfigResource struct {
 	ScreenWidth  int
@@ -93,29 +152,11 @@ type ConfigResource struct {
 	GameY        int
 }
 
-// InputResource holds the current input state and mode
-// This decouples systems from raw terminal events and InputHandler internal logic
-type InputResource struct {
-	GameMode       int // Maps to GameMode constants (Normal, Insert, etc)
-	CommandText    string
-	SearchText     string
-	PendingCommand string // Partial command buffer (e.g., "d2" while waiting for motion)
-	IsPaused       bool
-}
-
-// Constants for mapping integer GameMode in InputResource (Avoiding circular import with engine/game.go)
-const (
-	ResourceModeNormal  = 0
-	ResourceModeInsert  = 1
-	ResourceModeSearch  = 2
-	ResourceModeCommand = 3
-)
-
 // RenderConfig holds configuration for the rendering pipeline
 // This decouples renderers from specific terminal implementations and allows dynamic adjustment
 type RenderConfig struct {
 	// Color Configuration
-	ColorMode uint8 // 0=256, 1=TrueColor
+	ColorMode terminal.ColorMode // 0=256, 1=TrueColor
 
 	// Post-Processing: Grayout (Desaturation)
 	GrayoutDuration time.Duration
@@ -128,12 +169,7 @@ type RenderConfig struct {
 
 // EventQueueResource wraps the event queue for system access
 type EventQueueResource struct {
-	Queue *events.EventQueue
-}
-
-// AudioResource wraps the audio player interface
-type AudioResource struct {
-	Player AudioPlayer
+	Queue *event.EventQueue
 }
 
 // GameStateResource wraps GameState for read access by systems
@@ -146,55 +182,42 @@ type CursorResource struct {
 	Entity core.Entity
 }
 
-// CoreResources provides cached pointers to singleton resources
-// Initialized once per system to eliminate runtime map lookups
-type CoreResources struct {
-	Time   *TimeResource
-	Config *ConfigResource
-	State  *GameStateResource
-	Cursor *CursorResource
-	Input  *InputResource
-	Events *EventQueueResource
-	Status *status.Registry
-	ZIndex *ZIndexResolver
+// === Bridged Resources from Service ===
+
+// ContentProvider defines the interface for content access
+// Matches content.Service public API
+type ContentProvider interface {
+	CurrentContent() *core.PreparedContent
+	NotifyConsumed(count int)
 }
 
-// GetCoreResources populates CoreResources from the world's resource store
-// Call once during system construction; pointers remain valid for application lifetime
-func GetCoreResources(w *World) CoreResources {
-	res := CoreResources{
-		Time:   MustGetResource[*TimeResource](w.Resources),
-		Config: MustGetResource[*ConfigResource](w.Resources),
-		State:  MustGetResource[*GameStateResource](w.Resources),
-		Cursor: MustGetResource[*CursorResource](w.Resources),
-		Input:  MustGetResource[*InputResource](w.Resources),
-		Events: MustGetResource[*EventQueueResource](w.Resources),
-		Status: MustGetResource[*status.Registry](w.Resources),
-	}
-
-	// ZIndex is optional during early bootstrap (before resolver created)
-	if zRes, ok := GetResource[*ZIndexResolver](w.Resources); ok {
-		res.ZIndex = zRes
-	}
-
-	return res
+// ContentResource wraps a ContentProvider for the ResourceStore
+type ContentResource struct {
+	Provider ContentProvider
 }
 
-// Update modifies TimeResource fields in-place (zero allocation)
-// Must be called under world lock to prevent races with system reads
-func (tr *TimeResource) Update(gameTime, realTime time.Time, deltaTime time.Duration, frameNumber int64) {
-	tr.GameTime = gameTime
-	tr.RealTime = realTime
-	tr.DeltaTime = deltaTime
-	tr.FrameNumber = frameNumber
+// AudioPlayer defines the minimal audio interface used by game systems
+type AudioPlayer interface {
+	Play(core.SoundType) bool
+	ToggleMute() bool
+	IsMuted() bool
+	IsRunning() bool
 }
 
-// Update modifies InputResource fields in-place (zero allocation)
-// Must be called under world lock to prevent races with system reads
-func (ir *InputResource) Update(gameMode int, commandText, searchText, pendingCommand string, isPaused bool) {
-	ir.GameMode = gameMode
-	ir.CommandText = commandText
-	ir.SearchText = searchText
-	ir.PendingCommand = pendingCommand
-	ir.IsPaused = isPaused
+// AudioResource wraps the audio player interface
+type AudioResource struct {
+	Player AudioPlayer
+}
+
+// NetworkProvider defines the interface for network access
+type NetworkProvider interface {
+	Send(peerID uint32, msgType uint8, payload []byte) bool
+	Broadcast(msgType uint8, payload []byte)
+	PeerCount() int
+	IsRunning() bool
+}
+
+// NetworkResource wraps network provider for ECS access
+type NetworkResource struct {
+	Transport NetworkProvider
 }
