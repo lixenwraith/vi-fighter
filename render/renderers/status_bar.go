@@ -6,8 +6,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/lixenwraith/vi-fighter/components"
-	"github.com/lixenwraith/vi-fighter/constants"
+	"github.com/lixenwraith/vi-fighter/component"
+	"github.com/lixenwraith/vi-fighter/constant"
 	"github.com/lixenwraith/vi-fighter/engine"
 	"github.com/lixenwraith/vi-fighter/engine/status"
 	"github.com/lixenwraith/vi-fighter/render"
@@ -17,9 +17,12 @@ import (
 // StatusBarRenderer draws the status bar at the bottom
 type StatusBarRenderer struct {
 	gameCtx     *engine.GameContext
-	pingStore   *engine.Store[components.PingComponent]
-	energyStore *engine.Store[components.EnergyComponent]
-	boostStore  *engine.Store[components.BoostComponent]
+	pingStore   *engine.Store[component.PingComponent]
+	energyStore *engine.Store[component.EnergyComponent]
+	boostStore  *engine.Store[component.BoostComponent]
+
+	// Color mode (persist throughout runtime)
+	colorMode terminal.ColorMode
 
 	// Cached metric pointers (zero-lock reads)
 	statFPS        *atomic.Int64
@@ -32,11 +35,13 @@ type StatusBarRenderer struct {
 // NewStatusBarRenderer creates a status bar renderer
 func NewStatusBarRenderer(gameCtx *engine.GameContext) *StatusBarRenderer {
 	reg := engine.MustGetResource[*status.Registry](gameCtx.World.Resources)
+	render := engine.MustGetResource[*engine.RenderConfig](gameCtx.World.Resources)
 	return &StatusBarRenderer{
 		gameCtx:        gameCtx,
-		pingStore:      engine.GetStore[components.PingComponent](gameCtx.World),
-		energyStore:    engine.GetStore[components.EnergyComponent](gameCtx.World),
-		boostStore:     engine.GetStore[components.BoostComponent](gameCtx.World),
+		pingStore:      engine.GetStore[component.PingComponent](gameCtx.World),
+		energyStore:    engine.GetStore[component.EnergyComponent](gameCtx.World),
+		boostStore:     engine.GetStore[component.BoostComponent](gameCtx.World),
+		colorMode:      render.ColorMode,
 		statFPS:        reg.Ints.Get("engine.fps"),
 		statAPM:        reg.Ints.Get("engine.apm"),
 		statTicks:      reg.Ints.Get("engine.ticks"),
@@ -67,14 +72,14 @@ func (r *StatusBarRenderer) Render(ctx render.RenderContext, world *engine.World
 	x := 0
 
 	// Audio mute indicator - always visible
-	if r.gameCtx.AudioEngine != nil {
+	if player := r.gameCtx.GetAudioPlayer(); player != nil {
 		var audioBgColor render.RGB
-		if r.gameCtx.AudioEngine.IsMuted() {
+		if player.IsMuted() {
 			audioBgColor = render.RgbAudioMuted
 		} else {
 			audioBgColor = render.RgbAudioUnmuted
 		}
-		for _, ch := range constants.AudioStr {
+		for _, ch := range constant.AudioStr {
 			if x >= ctx.Width {
 				return // No space left
 			}
@@ -87,16 +92,16 @@ func (r *StatusBarRenderer) Render(ctx render.RenderContext, world *engine.World
 	var modeText string
 	var modeBgColor render.RGB
 	if r.gameCtx.IsSearchMode() {
-		modeText = constants.ModeTextSearch
+		modeText = constant.ModeTextSearch
 		modeBgColor = render.RgbModeSearchBg
 	} else if r.gameCtx.IsCommandMode() {
-		modeText = constants.ModeTextCommand
+		modeText = constant.ModeTextCommand
 		modeBgColor = render.RgbModeCommandBg
 	} else if r.gameCtx.IsInsertMode() {
-		modeText = constants.ModeTextInsert
+		modeText = constant.ModeTextInsert
 		modeBgColor = render.RgbModeInsertBg
 	} else {
-		modeText = constants.ModeTextNormal
+		modeText = constant.ModeTextNormal
 		modeBgColor = render.RgbModeNormalBg
 	}
 	for _, ch := range modeText {
@@ -248,7 +253,7 @@ func (r *StatusBarRenderer) Render(ctx render.RenderContext, world *engine.World
 
 	// Priority 8: Color Mode Indicator
 	var colorModeStr string
-	if r.gameCtx.Terminal.ColorMode() == terminal.ColorModeTrueColor {
+	if r.colorMode == terminal.ColorModeTrueColor {
 		colorModeStr = " TC "
 	} else {
 		colorModeStr = " 256 "

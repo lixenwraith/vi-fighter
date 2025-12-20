@@ -8,7 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lixenwraith/vi-fighter/constants"
+	"github.com/lixenwraith/vi-fighter/constant"
+	"github.com/lixenwraith/vi-fighter/core"
 )
 
 // activeSound tracks a playing sound instance
@@ -41,7 +42,7 @@ type Mixer struct {
 }
 
 type playRequest struct {
-	sound  SoundType
+	sound  core.SoundType
 	volume float64
 }
 
@@ -71,7 +72,7 @@ func (m *Mixer) Stop() {
 }
 
 // Play queues a sound with computed volume
-func (m *Mixer) Play(st SoundType, masterVol float64, effectVols map[SoundType]float64) {
+func (m *Mixer) Play(st core.SoundType, masterVol float64, effectVols map[core.SoundType]float64) {
 	if m.stopped.Load() {
 		return
 	}
@@ -97,12 +98,12 @@ func (m *Mixer) Errors() <-chan error {
 
 // loop is the main mixing goroutine
 func (m *Mixer) loop() {
-	ticker := time.NewTicker(constants.AudioBufferDuration)
+	ticker := time.NewTicker(constant.AudioBufferDuration)
 	defer ticker.Stop()
 
-	samplesPerTick := constants.AudioBufferSamples
+	samplesPerTick := constant.AudioBufferSamples
 	mixBuf := make([]float64, samplesPerTick)
-	outBytes := make([]byte, samplesPerTick*constants.AudioBytesPerFrame)
+	outBytes := make([]byte, samplesPerTick*constant.AudioBytesPerFrame)
 
 	for {
 		select {

@@ -3,15 +3,12 @@ package engine
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 
-	"github.com/lixenwraith/vi-fighter/audio"
-	"github.com/lixenwraith/vi-fighter/components"
-	"github.com/lixenwraith/vi-fighter/constants"
+	"github.com/lixenwraith/vi-fighter/component"
+	"github.com/lixenwraith/vi-fighter/constant"
 	"github.com/lixenwraith/vi-fighter/core"
 	"github.com/lixenwraith/vi-fighter/engine/status"
-	"github.com/lixenwraith/vi-fighter/events"
-	"github.com/lixenwraith/vi-fighter/terminal"
+	"github.com/lixenwraith/vi-fighter/event"
 )
 
 // UISnapshot provides a consistent view of UI state for rendering
@@ -26,14 +23,6 @@ type UISnapshot struct {
 	OverlayScroll  int
 }
 
-// AudioPlayer defines the minimal audio interface used by game systems
-type AudioPlayer interface {
-	Play(audio.SoundType) bool
-	ToggleMute() bool
-	IsMuted() bool
-	IsRunning() bool
-}
-
 // GameContext holds all game state including the ECS world
 type GameContext struct {
 	// Central game state (spawn/content/phase state management)
@@ -43,10 +32,10 @@ type GameContext struct {
 	World *World
 
 	// Event queue for inter-system communication
-	eventQueue *events.EventQueue
+	eventQueue *event.EventQueue
 
-	// Terminal interface
-	Terminal terminal.Terminal
+	// // Terminal interface
+	// Terminal terminal.Terminal
 
 	// Pausable Clock time provider
 	PausableClock *PausableClock
@@ -93,27 +82,21 @@ type GameContext struct {
 
 	// Pause state management (simplified - actual pause handled by PausableClock)
 	IsPaused atomic.Bool
-
-	// Audio engine (nil if audio disabled or initialization failed)
-	AudioEngine AudioPlayer
 }
 
 // NewGameContext creates a GameContext using an existing ECS World
 // Components must be registered before context creation
-func NewGameContext(term terminal.Terminal, world *World) *GameContext {
-	// Get terminal size
-	width, height := term.Size()
-
+// width/height are initial terminal dimensions
+func NewGameContext(world *World, width, height int) *GameContext {
 	// Create pausable clock
 	pausableClock := NewPausableClock()
 
 	ctx := &GameContext{
 		World:         world,
-		Terminal:      term,
 		PausableClock: pausableClock,
 		Width:         width,
 		Height:        height,
-		eventQueue:    events.NewEventQueue(),
+		eventQueue:    event.NewEventQueue(),
 	}
 
 	// Initialize atomic mode
@@ -122,7 +105,7 @@ func NewGameContext(term terminal.Terminal, world *World) *GameContext {
 	// Calculate game area
 	ctx.updateGameArea()
 
-	// -- Initialize Core Resources --
+	// -- Initialize Resources --
 
 	// 0. Status Registry (before other resources that may use it)
 	statusRegistry := status.NewRegistry()
@@ -143,30 +126,27 @@ func NewGameContext(term terminal.Terminal, world *World) *GameContext {
 	timeRes := &TimeResource{
 		GameTime:    pausableClock.Now(),
 		RealTime:    pausableClock.RealTime(),
-		DeltaTime:   0,
+		DeltaTime:   constant.GameUpdateInterval,
 		FrameNumber: 0,
 	}
 	AddResource(ctx.World.Resources, timeRes)
 
-	// 3. Input Resource (Initial state)
-	inputRes := &InputResource{
-		GameMode: ResourceModeNormal,
-		IsPaused: false,
-	}
-	AddResource(ctx.World.Resources, inputRes)
-
-	// 4. Event Queue Resource
+	// 3. Event Queue Resource
 	AddResource(ctx.World.Resources, &EventQueueResource{Queue: ctx.eventQueue})
 
-	// 5. Game State
+	// 4. Game State
 	ctx.State = NewGameState(pausableClock.Now())
 	AddResource(ctx.World.Resources, &GameStateResource{State: ctx.State})
 
-	// 6. Cursor Entity
+	// 5. Cursor Entity
 	ctx.CreateCursorEntity()
 
-	// 7. Cursor Resource
+	// 6. Cursor Resource
 	AddResource(ctx.World.Resources, &CursorResource{Entity: ctx.CursorEntity})
+
+	// ZIndex resolver for entity interaction ordering
+	zIndexResolver := NewZIndexResolver(ctx.World)
+	AddResource(ctx.World.Resources, zIndexResolver)
 
 	// Initialize pause state
 	ctx.IsPaused.Store(false)
@@ -179,52 +159,46 @@ func NewGameContext(term terminal.Terminal, world *World) *GameContext {
 func (ctx *GameContext) CreateCursorEntity() {
 	// Create cursor entity at the center of the screen
 	ctx.CursorEntity = ctx.World.CreateEntity()
-	ctx.World.Positions.Add(ctx.CursorEntity, components.PositionComponent{
+	ctx.World.Positions.Add(ctx.CursorEntity, component.PositionComponent{
 		X: ctx.GameWidth / 2,
 		Y: ctx.GameHeight / 2,
 	})
 
-	GetStore[components.CursorComponent](ctx.World).Add(ctx.CursorEntity, components.CursorComponent{})
+	GetStore[component.CursorComponent](ctx.World).Add(ctx.CursorEntity, component.CursorComponent{})
 
 	// Make cursor indestructible
-	GetStore[components.ProtectionComponent](ctx.World).Add(ctx.CursorEntity, components.ProtectionComponent{
-		Mask:      components.ProtectAll,
+	GetStore[component.ProtectionComponent](ctx.World).Add(ctx.CursorEntity, component.ProtectionComponent{
+		Mask:      component.ProtectAll,
 		ExpiresAt: 0, // No expiry
 	})
 
 	// Add PingComponent to cursor (handles crosshair and grid state)
-	GetStore[components.PingComponent](ctx.World).Add(ctx.CursorEntity, components.PingComponent{
+	GetStore[component.PingComponent](ctx.World).Add(ctx.CursorEntity, component.PingComponent{
 		ShowCrosshair:  true,
-		CrosshairColor: components.ColorNormal,
+		CrosshairColor: component.ColorNormal,
 		GridActive:     false,
 		GridRemaining:  0,
-		GridColor:      components.ColorNormal,
+		GridColor:      component.ColorNormal,
 		ContextAware:   true,
 	})
 
 	// Add HeatComponent to cursor
-	GetStore[components.HeatComponent](ctx.World).Add(ctx.CursorEntity, components.HeatComponent{})
+	GetStore[component.HeatComponent](ctx.World).Add(ctx.CursorEntity, component.HeatComponent{})
 
 	// Add EnergyComponent to cursor
-	GetStore[components.EnergyComponent](ctx.World).Add(ctx.CursorEntity, components.EnergyComponent{})
+	GetStore[component.EnergyComponent](ctx.World).Add(ctx.CursorEntity, component.EnergyComponent{})
 
 	// Add ShieldComponent to cursor (initially invisible via GameState.ShieldActive)
-	GetStore[components.ShieldComponent](ctx.World).Add(ctx.CursorEntity, components.ShieldComponent{
-		RadiusX:       constants.ShieldRadiusX,
-		RadiusY:       constants.ShieldRadiusY,
-		OverrideColor: components.ColorNone,
-		MaxOpacity:    constants.ShieldMaxOpacity,
+	GetStore[component.ShieldComponent](ctx.World).Add(ctx.CursorEntity, component.ShieldComponent{
+		RadiusX:       constant.ShieldRadiusX,
+		RadiusY:       constant.ShieldRadiusY,
+		OverrideColor: component.ColorNone,
+		MaxOpacity:    constant.ShieldMaxOpacity,
 		LastDrainTime: ctx.PausableClock.Now(),
 	})
 
 	// Add BoostComponent to cursor
-	GetStore[components.BoostComponent](ctx.World).Add(ctx.CursorEntity, components.BoostComponent{})
-}
-
-// SetAudioEngine sets the audio engine and registers it as a resource
-func (ctx *GameContext) SetAudioEngine(engine AudioPlayer) {
-	ctx.AudioEngine = engine
-	AddResource(ctx.World.Resources, &AudioResource{Player: engine})
+	GetStore[component.BoostComponent](ctx.World).Add(ctx.CursorEntity, component.BoostComponent{})
 }
 
 // ===== INPUT-SPECIFIC METHODS =====
@@ -244,23 +218,29 @@ func (ctx *GameContext) SetPaused(paused bool) {
 	}
 }
 
-// GetRealTime returns wall clock time for UI elements
-func (ctx *GameContext) GetRealTime() time.Time {
-	return ctx.PausableClock.RealTime()
+// GetAudioPlayer retrieves audio player from resources
+// Returns nil if audio unavailable
+func (ctx *GameContext) GetAudioPlayer() AudioPlayer {
+	if res, ok := GetResource[*AudioResource](ctx.World.Resources); ok {
+		return res.Player
+	}
+	return nil
 }
 
 // StopAudio mutes audio during pause (sounds complete naturally)
 func (ctx *GameContext) StopAudio() {
-	if ctx.AudioEngine != nil && ctx.AudioEngine.IsRunning() && !ctx.AudioEngine.IsMuted() {
-		ctx.AudioEngine.ToggleMute()
+	player := ctx.GetAudioPlayer()
+	if player != nil && player.IsRunning() && !player.IsMuted() {
+		player.ToggleMute()
 	}
 }
 
 // ToggleAudioMute toggles the mute state of the audio engine
 // Returns the new mute state (true if muted, false if unmuted)
 func (ctx *GameContext) ToggleAudioMute() bool {
-	if ctx.AudioEngine != nil {
-		return ctx.AudioEngine.ToggleMute()
+	player := ctx.GetAudioPlayer()
+	if player != nil {
+		return player.ToggleMute()
 	}
 	return false
 }
@@ -268,13 +248,13 @@ func (ctx *GameContext) ToggleAudioMute() bool {
 // updateGameArea calculates the game area dimensions
 func (ctx *GameContext) updateGameArea() {
 	// Calculate line number width based on height
-	gameHeight := ctx.Height - constants.BottomMargin - constants.TopMargin
+	gameHeight := ctx.Height - constant.BottomMargin - constant.TopMargin
 	if gameHeight < 1 {
 		gameHeight = 1
 	}
 
-	ctx.GameX = constants.LeftMargin
-	ctx.GameY = constants.TopMargin
+	ctx.GameX = constant.LeftMargin
+	ctx.GameY = constant.TopMargin
 	ctx.GameWidth = ctx.Width - ctx.GameX
 	ctx.GameHeight = gameHeight
 
@@ -285,22 +265,18 @@ func (ctx *GameContext) updateGameArea() {
 
 // HandleResize handles terminal resize events
 func (ctx *GameContext) HandleResize() {
-	newWidth, newHeight := ctx.Terminal.Size()
-	if newWidth != ctx.Width || newHeight != ctx.Height {
-		ctx.Width = newWidth
-		ctx.Height = newHeight
-		ctx.updateGameArea()
+	// New Height and Width already set in context by main
+	ctx.updateGameArea()
 
-		// Update ConfigResource
-		configRes := &ConfigResource{
-			ScreenWidth:  ctx.Width,
-			ScreenHeight: ctx.Height,
-			GameWidth:    ctx.GameWidth,
-			GameHeight:   ctx.GameHeight,
-			GameX:        ctx.GameX,
-			GameY:        ctx.GameY,
-		}
-		AddResource(ctx.World.Resources, configRes)
+	ctx.World.RunSafe(func() {
+		// Update existing ConfigResource in-place
+		configRes := MustGetResource[*ConfigResource](ctx.World.Resources)
+		configRes.ScreenWidth = ctx.Width
+		configRes.ScreenHeight = ctx.Height
+		configRes.GameWidth = ctx.GameWidth
+		configRes.GameHeight = ctx.GameHeight
+		configRes.GameX = ctx.GameX
+		configRes.GameY = ctx.GameY
 
 		// TODO: Optional disable (world.crop)
 		// Cleanup entities outside new bounds to prevent ghosting/resource usage
@@ -313,12 +289,15 @@ func (ctx *GameContext) HandleResize() {
 			pos.Y = max(0, min(pos.Y, ctx.GameHeight-1))
 			ctx.World.Positions.Add(ctx.CursorEntity, pos)
 		}
-	}
+	})
 }
 
 // cleanupOutOfBoundsEntities tags entities that are outside the valid game area
 // Actual destruction is handled by CullSystem in the next tick
 func (ctx *GameContext) cleanupOutOfBoundsEntities(width, height int) {
+	protStore := GetStore[component.ProtectionComponent](ctx.World)
+	deathStore := GetStore[component.DeathComponent](ctx.World)
+
 	// Unified cleanup: single PositionStore iteration handles all entity types
 	allEntities := ctx.World.Positions.All()
 	for _, e := range allEntities {
@@ -328,9 +307,8 @@ func (ctx *GameContext) cleanupOutOfBoundsEntities(width, height int) {
 		}
 
 		// Check protection flags before marking
-		protStore := GetStore[components.ProtectionComponent](ctx.World)
 		if prot, ok := protStore.Get(e); ok {
-			if prot.Mask.Has(components.ProtectFromCull) || prot.Mask == components.ProtectAll {
+			if prot.Mask.Has(component.ProtectFromCull) || prot.Mask == component.ProtectAll {
 				continue
 			}
 		}
@@ -338,10 +316,9 @@ func (ctx *GameContext) cleanupOutOfBoundsEntities(width, height int) {
 		// Mark entities outside valid coordinate space [0, width) × [0, height)
 		// We use OutOfBoundsComponent instead of immediate destruction to allow
 		// systems (like GoldSystem) to detect the loss and update GameState
-		deathStore := GetStore[components.DeathComponent](ctx.World)
 		pos, _ := ctx.World.Positions.Get(e)
 		if pos.X >= width || pos.Y >= height || pos.X < 0 || pos.Y < 0 {
-			deathStore.Add(e, components.DeathComponent{})
+			deathStore.Add(e, component.DeathComponent{})
 		}
 	}
 
@@ -479,8 +456,8 @@ func (ctx *GameContext) IncrementFrameNumber() int64 {
 // ===== EVENT QUEUE METHODS =====
 
 // PushEvent adds an event to the event queue with current frame number and provided timestamp
-func (ctx *GameContext) PushEvent(eventType events.EventType, payload any) {
-	event := events.GameEvent{
+func (ctx *GameContext) PushEvent(eventType event.EventType, payload any) {
+	event := event.GameEvent{
 		Type:    eventType,
 		Payload: payload,
 		Frame:   ctx.State.GetFrameNumber(),
