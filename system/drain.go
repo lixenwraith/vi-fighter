@@ -34,9 +34,10 @@ type DrainSystem struct {
 	protStore   *engine.Store[component.ProtectionComponent]
 	shieldStore *engine.Store[component.ShieldComponent]
 	heatStore   *engine.Store[component.HeatComponent]
-	seqStore    *engine.Store[component.SequenceComponent]
 	charStore   *engine.Store[component.CharacterComponent]
 	nuggetStore *engine.Store[component.NuggetComponent]
+	memberStore *engine.Store[component.MemberComponent]
+	headerStore *engine.Store[component.CompositeHeaderComponent]
 
 	// Spawn queue for staggered materialization
 	pendingSpawns []pendingDrainSpawn
@@ -59,9 +60,10 @@ func NewDrainSystem(world *engine.World) engine.System {
 		protStore:   engine.GetStore[component.ProtectionComponent](world),
 		shieldStore: engine.GetStore[component.ShieldComponent](world),
 		heatStore:   engine.GetStore[component.HeatComponent](world),
-		seqStore:    engine.GetStore[component.SequenceComponent](world),
 		charStore:   engine.GetStore[component.CharacterComponent](world),
 		nuggetStore: engine.GetStore[component.NuggetComponent](world),
+		memberStore: engine.GetStore[component.MemberComponent](world),
+		headerStore: engine.GetStore[component.CompositeHeaderComponent](world),
 
 		pendingSpawns: make([]pendingDrainSpawn, 0, constant.DrainMaxCount),
 	}
@@ -445,10 +447,8 @@ func (s *DrainSystem) despawnDrainWithFlash(entity core.Entity) {
 			Char: constant.DrainChar,
 		})
 	}
-	s.world.PushEvent(event.EventRequestDeath, &event.DeathRequestPayload{
-		Entities:    []core.Entity{entity},
-		EffectEvent: 0, // Flash already emitted
-	})
+	// TODO: integrate flash with drain; issue: non-typeable character, can't extract. or use explosion?
+	event.EmitDeathOne(s.res.Events.Queue, entity, 0, s.res.Time.FrameNumber)
 }
 
 // materializeDrainAt creates a drain entity at the specified position
@@ -773,12 +773,16 @@ func (s *DrainSystem) handleCollisionAtPosition(entity core.Entity) {
 		return
 	}
 
-	// Check it's a gold sequence entity - destroy entire sequence
-	if seq, ok := s.seqStore.Get(entity); ok {
-		if seq.Type == component.SequenceGold {
-			s.handleGoldSequenceCollision(seq.ID)
+	// Check composite membership first (handles Gold after migration)
+	if member, ok := s.memberStore.Get(entity); ok {
+		header, headerOk := s.headerStore.Get(member.AnchorID)
+		if headerOk && header.BehaviorID == component.BehaviorGold {
+			s.handleGoldCompositeCollision(member.AnchorID, &header)
 			return
 		}
+		// Non-gold composite member: destroy single entity
+		s.world.DestroyEntity(entity)
+		return
 	}
 
 	// Check if it's a nugget, destroy and clean up the ID
@@ -791,32 +795,32 @@ func (s *DrainSystem) handleCollisionAtPosition(entity core.Entity) {
 	s.world.DestroyEntity(entity)
 }
 
-// handleGoldSequenceCollision removes all gold sequence entities and emits destruction event
-func (s *DrainSystem) handleGoldSequenceCollision(sequenceID int) {
-	// Emit event BEFORE destroying entities - GoldSystem validates if ID matches
+// handleGoldCompositeCollision destroys entire gold composite via anchor
+func (s *DrainSystem) handleGoldCompositeCollision(anchorID core.Entity, header *component.CompositeHeaderComponent) {
 	s.world.PushEvent(event.EventGoldDestroyed, &event.GoldCompletionPayload{
-		SequenceID: sequenceID,
+		SequenceID: int(header.GroupID),
 	})
 
-	// Find and destroy all gold sequence entities with this ID
-	goldSequenceEntities := s.seqStore.All()
-	for _, goldSequenceEntity := range goldSequenceEntities {
-		seq, ok := s.seqStore.Get(goldSequenceEntity)
-		if !ok {
+	// Destroy all living members with flash
+	for _, m := range header.Members {
+		if m.Entity == 0 {
 			continue
 		}
-
-		if seq.Type == component.SequenceGold && seq.ID == sequenceID {
-			if pos, ok := s.world.Positions.Get(goldSequenceEntity); ok {
-				if char, ok := s.charStore.Get(goldSequenceEntity); ok {
-					s.world.PushEvent(event.EventFlashRequest, &event.FlashRequestPayload{
-						X: pos.X, Y: pos.Y, Char: char.Rune,
-					})
-				}
+		if pos, ok := s.world.Positions.Get(m.Entity); ok {
+			if char, ok := s.charStore.Get(m.Entity); ok {
+				s.world.PushEvent(event.EventFlashRequest, &event.FlashRequestPayload{
+					X: pos.X, Y: pos.Y, Char: char.Rune,
+				})
 			}
-			s.world.DestroyEntity(goldSequenceEntity)
 		}
+		s.memberStore.Remove(m.Entity)
+		s.world.DestroyEntity(m.Entity)
 	}
+
+	// Destroy phantom head
+	s.protStore.Remove(anchorID)
+	s.headerStore.Remove(anchorID)
+	s.world.DestroyEntity(anchorID)
 }
 
 // handleNuggetCollision destroys the nugget entity and emits destruction event

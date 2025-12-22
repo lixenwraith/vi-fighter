@@ -13,8 +13,6 @@ import (
 // Must be called before systems are created
 func RegisterComponents(w *engine.World) {
 	engine.RegisterComponent[component.CharacterComponent](w)
-	engine.RegisterComponent[component.SequenceComponent](w)
-	engine.RegisterComponent[component.GoldSequenceComponent](w)
 	engine.RegisterComponent[component.FlashComponent](w)
 	engine.RegisterComponent[component.NuggetComponent](w)
 	engine.RegisterComponent[component.DrainComponent](w)
@@ -31,6 +29,10 @@ func RegisterComponents(w *engine.World) {
 	engine.RegisterComponent[component.DecayComponent](w)
 	engine.RegisterComponent[component.CleanerComponent](w)
 	engine.RegisterComponent[component.MaterializeComponent](w)
+	engine.RegisterComponent[component.TypeableComponent](w)
+	engine.RegisterComponent[component.CompositeHeaderComponent](w)
+	engine.RegisterComponent[component.MemberComponent](w)
+	engine.RegisterComponent[component.TypeableComponent](w)
 }
 
 // RegisterSystems registers all system factories with the registry
@@ -49,6 +51,12 @@ func RegisterSystems() {
 	})
 	registry.RegisterSystem("boost", func(w any) any {
 		return system.NewBoostSystem(w.(*engine.World))
+	})
+	registry.RegisterSystem("typing", func(w any) any {
+		return system.NewTypingSystem(w.(*engine.World))
+	})
+	registry.RegisterSystem("composite", func(w any) any {
+		return system.NewCompositeSystem(w.(*engine.World))
 	})
 	registry.RegisterSystem("spawn", func(w any) any {
 		return system.NewSpawnSystem(w.(*engine.World))
@@ -156,6 +164,8 @@ func ActiveSystems() []string {
 		"shield",
 		"heat",
 		"boost",
+		"typing",
+		"composite",
 		"spawn",
 		"nugget",
 		"decay",
