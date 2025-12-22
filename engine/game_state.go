@@ -5,54 +5,42 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lixenwraith/vi-fighter/core"
 	"github.com/lixenwraith/vi-fighter/engine/status"
 )
 
 // GameState centralizes game state with clear ownership boundaries
 type GameState struct {
-	// Mode state (Atomic)
-	mode atomic.Int32
-
 	// ===== REAL-TIME STATE (lock-free atomics) =====
 
 	// Grayout visual effect state
 	GrayoutActive    atomic.Bool
 	GrayoutStartTime atomic.Int64 // UnixNano
 
-	// Sequence ID generation (atomic for thread-safety)
-	NextSeqID atomic.Int64
-
-	// Frame counter (atomic for thread-safety, incremented each render)
-	FrameNumber atomic.Int64
+	// Unified ID generation
+	// TODO: This is mainly used by spawn, all others use world's `nextEntityID` migrate and deprecate
+	NextID atomic.Uint64
 
 	// Runtime Metrics
 	GameTicks      atomic.Uint64
 	CurrentAPM     atomic.Uint64
 	PendingActions atomic.Uint64 // Actions in the current second bucket
 
-	// ===== CLOCK-TICK STATE (mutex protected) =====
+	// === CLOCK-TICK STATE (mutex protected) ===
 
 	mu sync.RWMutex
 
 	// APM History (mutex protected)
 	apmHistory      [60]uint64
 	apmHistoryIndex int
-
-	// Screen fill tracking (for adaptive spawn rate)
-	EntityCount   int     // Current number of entities on screen
-	MaxEntities   int     // Maximum allowed entities
-	ScreenDensity float64 // Percentage of screen filled (0.0-1.0)
 }
 
 // initState initializes all game state fields to starting values
 // Called by both NewGameState and Reset to avoid duplication
-func (gs *GameState) initState(now time.Time) {
+func (gs *GameState) initState() {
 	// Reset atomics
 	gs.GrayoutActive.Store(false)
 	gs.GrayoutStartTime.Store(0)
-	gs.NextSeqID.Store(1)
-	gs.FrameNumber.Store(0)
+	gs.NextID.Store(1)
 
 	// Reset metrics
 	gs.GameTicks.Store(0)
@@ -62,71 +50,26 @@ func (gs *GameState) initState(now time.Time) {
 	// Mutex-protected fields (caller may or may not hold lock)
 	gs.apmHistory = [60]uint64{}
 	gs.apmHistoryIndex = 0
-
-	// Spawn state
-	gs.EntityCount = 0
 }
 
 // NewGameState creates a new centralized game state
-func NewGameState(now time.Time) *GameState {
+func NewGameState() *GameState {
 	gs := &GameState{}
-	gs.initState(now)
+	gs.initState()
 	return gs
 }
 
 // Reset resets the game state for a new game
 // Ensures clean state for :new command without recreation
-func (gs *GameState) Reset(now time.Time) {
+func (gs *GameState) Reset() {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-	gs.initState(now)
+	gs.initState()
 }
 
-// IncrementSeqID increments and returns the next sequence ID
-func (gs *GameState) IncrementSeqID() int {
-	return int(gs.NextSeqID.Add(1))
-}
-
-// GetFrameNumber returns the current frame number
-func (gs *GameState) GetFrameNumber() int64 {
-	return gs.FrameNumber.Load()
-}
-
-// IncrementFrameNumber increments and returns the frame number
-func (gs *GameState) IncrementFrameNumber() int64 {
-	return gs.FrameNumber.Add(1)
-}
-
-// ===== MODE ACCESSORS =====
-// TODO: to be, or not to be here. Mode fits in both context (meta/overlay) and here.
-// GetMode returns the current game mode
-func (gs *GameState) GetMode() core.GameMode {
-	return core.GameMode(gs.mode.Load())
-}
-
-// SetMode sets the current game mode
-func (gs *GameState) SetMode(m core.GameMode) {
-	gs.mode.Store(int32(m))
-}
-
-// IsInsertMode returns true if in insert mode
-func (gs *GameState) IsInsertMode() bool {
-	return gs.GetMode() == core.ModeInsert
-}
-
-// IsSearchMode returns true if in search mode
-func (gs *GameState) IsSearchMode() bool {
-	return gs.GetMode() == core.ModeSearch
-}
-
-// IsCommandMode returns true if in command mode
-func (gs *GameState) IsCommandMode() bool {
-	return gs.GetMode() == core.ModeCommand
-}
-
-// IsOverlayMode returns true if in overlay mode
-func (gs *GameState) IsOverlayMode() bool {
-	return gs.GetMode() == core.ModeOverlay
+// IncrementID increments and returns the next ID
+func (gs *GameState) IncrementID() int {
+	return int(gs.NextID.Add(1))
 }
 
 // ===== RUNTIME METRICS ACCESSORS =====

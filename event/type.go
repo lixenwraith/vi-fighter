@@ -248,10 +248,21 @@ const (
 	// Consumer: ClockScheduler | Payload: nil
 	EventDecayComplete
 
-	// EventRequestDeath signals intent to destroy game entities
-	// Trigger: Game systems (Energy, Drain, Decay, Cleaner, etc.)
+	// EventDeathOne signals intent to destroy a single game entity (scalar/silent)
+	// Trigger: TypingSystem, NuggetSystem, etc.
+	// Consumer: DeathSystem | Payload: core.Entity
+	EventDeathOne
+
+	// EventDeathBatch signals intent to destroy a batch of entities with an optional effect
+	// Trigger: CleanerSystem, DecaySystem, etc.
 	// Consumer: DeathSystem | Payload: *DeathRequestPayload
-	EventRequestDeath
+	EventDeathBatch
+
+	// EventMemberTyped signals a composite member was successfully typed
+	// Trigger: TypingSystem on valid member character match
+	// Consumer: CompositeSystem routes to behavior-specific handler
+	// Payload: *MemberTypedPayload
+	EventMemberTyped
 )
 
 // GameEvent represents a single game event with metadata
