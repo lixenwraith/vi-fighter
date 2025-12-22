@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lixenwraith/vi-fighter/component"
 	"github.com/lixenwraith/vi-fighter/core"
@@ -17,6 +18,10 @@ type World struct {
 
 	// Global Resources
 	Resources *ResourceStore
+
+	// Direct pointers for high-frequency path optimization
+	eventQueue  *event.EventQueue
+	frameSource *atomic.Int64
 
 	// Position Store (Special - spatial index, kept as named field)
 	Positions *PositionStore
@@ -158,6 +163,12 @@ func (w *World) Lock() {
 	w.updateMutex.Lock()
 }
 
+// TryLock attempts to acquire the update mutex without blocking
+// Returns true if lock acquired, false if already held
+func (w *World) TryLock() bool {
+	return w.updateMutex.TryLock()
+}
+
 // Unlock releases the update mutex
 func (w *World) Unlock() {
 	w.updateMutex.Unlock()
@@ -193,17 +204,33 @@ func (w *World) Clear() {
 	}
 }
 
-// PushEvent emits a game event using world resources
-func (w *World) PushEvent(eventType event.EventType, payload any) {
-	eqRes, eqOk := GetResource[*EventQueueResource](w.Resources)
-	stateRes, stateOk := GetResource[*GameStateResource](w.Resources)
-	if !eqOk || !stateOk {
-		return
+// TODO: more clutches for clockscheduler
+// FrameNumber returns the current authoritative frame index from GameContext
+// Optimized for hot-path access by simulation and event loops
+func (w *World) FrameNumber() int64 {
+	if w.frameSource == nil {
+		return 0
 	}
-	event := event.GameEvent{
+	return w.frameSource.Load()
+}
+
+// SetEventMetadata wires the direct pointers for PushEvent optimization
+// Called once during GameContext initialization
+func (w *World) SetEventMetadata(q *event.EventQueue, f *atomic.Int64) {
+	w.eventQueue = q
+	w.frameSource = f
+}
+
+// PushEvent emits a game event using direct cached pointers
+// This is the hot-path for all system communication
+func (w *World) PushEvent(eventType event.EventType, payload any) {
+	if w.eventQueue == nil || w.frameSource == nil {
+		return // Not yet initialized
+	}
+
+	w.eventQueue.Push(event.GameEvent{
 		Type:    eventType,
 		Payload: payload,
-		Frame:   stateRes.State.GetFrameNumber(),
-	}
-	eqRes.Queue.Push(event)
+		Frame:   w.frameSource.Load(),
+	})
 }
