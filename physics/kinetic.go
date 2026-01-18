@@ -1,4 +1,4 @@
-package component
+package physics
 
 import (
 	"github.com/lixenwraith/vi-fighter/vmath"
