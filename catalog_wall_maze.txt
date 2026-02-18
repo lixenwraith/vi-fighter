@@ -1,0 +1,13 @@
+./engine/clock_scheduler.go
+./engine/fsm/builder.go
+./engine/fsm/config.go
+./engine/fsm/file_loader.go
+./engine/fsm/loader.go
+./engine/fsm/machine.go
+./engine/fsm/types.go
+./engine/resource.go
+./engine/store.go
+./engine/world.go
+./event/registry.go
+./manifest/fsm_bridge.go
+./system/wall.go
