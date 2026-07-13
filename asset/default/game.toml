@@ -1,5 +1,3 @@
-# Root configuration with region definitions
-
 [regions.main]
 initial = "MainSpawnGold"
 file = "main.toml"
@@ -18,8 +16,5 @@ initial = "MonitorWarmup"
 file = "monitor.toml"
 background = true
 
-[regions.tower]
-file = "tower.toml"
-disabled_systems = ["glyph"]
-
-#[states.Root]
+[regions.placeholder]
+file = "placeholder.toml"
