@@ -1,4 +1,4 @@
-# Placeholder region: triggered from storm escalation
+# Placeholder Region
 
 [states.PlaceholderSetup]
 parent = "Root"
@@ -14,7 +14,7 @@ transitions = [
 parent = "Root"
 # Placeholder: add gameplay transitions here
 transitions = [
-    { trigger = "Tick", target = "PlaceholderExit", guard = "StateTimeExceeds", guard_args = { ms = 5000 } },
+    { trigger = "Tick", target = "PlaceholderExit", guard = "StateTimeExceeds", guard_args = { ms = 5000 } }
 ]
 
 [states.PlaceholderExit]
@@ -24,3 +24,4 @@ on_enter = [
     { action = "ResumeRegion", region = "main" },
     { action = "TerminateRegion", region = "placeholder" },
 ]
+
