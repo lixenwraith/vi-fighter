@@ -499,6 +499,16 @@ type ExplosionRequestPayload struct {
 	Type   ExplosionType `toml:"type"`   // Explosion variant
 }
 
+// DustExplosionRequestPayload describes one dust explosion crossing into
+// shared combat. OwnerCursor is already resolved to the firing cursor.
+type DustExplosionRequestPayload struct {
+	OwnerCursor core.Entity                `toml:"owner_cursor"`
+	CenterX     int                        `toml:"center_x"`
+	CenterY     int                        `toml:"center_y"`
+	Radius      float64                    `toml:"radius"`
+	AttackType  component.CombatAttackType `toml:"attack_type"`
+}
+
 // --- Dust ---
 
 // DustSpawnOneRequestPayload contains parameters for single dust entity creation

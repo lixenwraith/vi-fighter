@@ -269,19 +269,24 @@ func (s *ExplosionSystem) addCenter(cursor core.Entity, x, y int, radius float64
 	s.statTriggered.Add(1)
 }
 
-// processExplosionArea handles entity collection and event emission for explosion effects
-// Single-pass sweep: collects combat entities (always), converts glyphs (dust only)
+// processExplosionArea handles local explosion effects and shared missile
+// effects. Dust explosions cross into shared combat through
+// EventDustExplosionRequest instead of publishing per-target combat events.
 func (s *ExplosionSystem) processExplosionArea(cursorEntity core.Entity, centerX, centerY int, radius float64, explosionType event.ExplosionType) {
 	config := s.world.Resources.Config
 
 	// Determine behavior based on explosion type
 	var attackType component.CombatAttackType
 	convertGlyphs := false
+	collectPlayerTargets := false
+	collectSharedTargets := true
 
 	switch explosionType {
 	case event.ExplosionTypeDust:
 		attackType = component.CombatAttackExplosion
 		convertGlyphs = true
+		collectPlayerTargets = true
+		collectSharedTargets = false
 	case event.ExplosionTypeMissile:
 		attackType = component.CombatAttackMissile
 	case event.ExplosionTypeEye:
@@ -325,14 +330,19 @@ func (s *ExplosionSystem) processExplosionArea(cursorEntity core.Entity, centerX
 			count := s.world.Positions.GetAllEntitiesAtInto(x, y, entityBuf[:])
 			for i := range count {
 				entity := entityBuf[i]
-				// Drain - collect for combat
-				if s.world.Components.Drain.HasEntity(entity) {
+				// Drains are Player-domain. Only the Player dust path may read
+				// and affect them; shared missile explosions ignore them.
+				if collectPlayerTargets && s.world.Components.Drain.HasEntity(entity) {
 					s.drainBuf = append(s.drainBuf, entity)
 					continue
 				}
 
 				// Composite member - collect by header
-				if memberComp, ok := s.world.Components.Member.GetPtr(entity); ok {
+				if collectSharedTargets {
+					memberComp, ok := s.world.Components.Member.GetPtr(entity)
+					if !ok {
+						continue
+					}
 					headerEntity := memberComp.HeaderEntity
 					headerComp, ok := s.world.Components.Header.GetPtr(headerEntity)
 					if !ok {
@@ -393,18 +403,30 @@ func (s *ExplosionSystem) processExplosionArea(cursorEntity core.Entity, centerX
 		})
 	}
 
-	// Emit combat events for composites (batched by header)
-	for i := range s.compositeBuf {
-		s.world.PushEvent(event.EventCombatAttackAreaRequest, &event.CombatAttackAreaRequestPayload{
-			AttackType:   attackType,
-			OwnerEntity:  cursorEntity,
-			OriginEntity: cursorEntity,
-			TargetEntity: s.compositeBuf[i].header,
-			HitEntities:  s.compositeBuf[i].members,
-			HasOrigin:    true,
-			OriginX:      centerX,
-			OriginY:      centerY,
+	if explosionType == event.ExplosionTypeDust {
+		// This geometry-bearing event is the sole dust-to-shared combat
+		// crossing. The shared-side consumer resolves targets independently.
+		s.world.PushEvent(event.EventDustExplosionRequest, &event.DustExplosionRequestPayload{
+			OwnerCursor: cursorEntity,
+			CenterX:     centerX,
+			CenterY:     centerY,
+			Radius:      radius,
+			AttackType:  attackType,
 		})
+	} else {
+		// Shared explosion types can emit combat events directly.
+		for i := range s.compositeBuf {
+			s.world.PushEvent(event.EventCombatAttackAreaRequest, &event.CombatAttackAreaRequestPayload{
+				AttackType:   attackType,
+				OwnerEntity:  cursorEntity,
+				OriginEntity: cursorEntity,
+				TargetEntity: s.compositeBuf[i].header,
+				HitEntities:  s.compositeBuf[i].members,
+				HasOrigin:    true,
+				OriginX:      centerX,
+				OriginY:      centerY,
+			})
+		}
 	}
 
 	// Glyph death and dust spawn (dust only)

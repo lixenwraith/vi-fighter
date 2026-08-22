@@ -266,6 +266,8 @@ const (
 
 	// EventExplosionRequest (ExplosionRequestPayload) triggers explosion effect at location
 	EventExplosionRequest
+	// EventDustExplosionRequest (DustExplosionRequestPayload) carries the dedicated dust-explosion Bus crossing into shared combat
+	EventDustExplosionRequest
 
 	// --- Dust ---
 
