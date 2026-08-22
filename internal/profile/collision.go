@@ -78,11 +78,8 @@ var (
 	ExplosionToEye       = accumulate(MassExplosion, MassEye, parameter.DrainDeflectAngleVar, OffsetBody)
 )
 
-// --- Dust ---
-var (
-	DustToDrain     = accumulate(MassDust, MassDrain, parameter.DrainDeflectAngleVar, OffsetNone)
-	DustToComposite = accumulate(MassDust, MassQuasar, parameter.DrainDeflectAngleVar, OffsetNone)
-)
+// --- Dust (player-domain species only) ---
+var DustToDrain = accumulate(MassDust, MassDrain, parameter.DrainDeflectAngleVar, OffsetNone)
 
 // --- Soft collision (inter-species scatter) ---
 var (

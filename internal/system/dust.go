@@ -17,21 +17,15 @@ import (
 	"github.com/lixenwraith/vi-fighter/pkg/vmath/physics"
 )
 
-const (
-	cellFlagDrain           uint8 = 1
-	cellFlagCombatComposite uint8 = 2
-)
+const cellFlagDrain uint8 = 1
 
 // collisionContext holds pre-computed collision data for single tick
 type collisionContext struct {
-	// Cell flags: 1=drain, 2=combat composite
+	// Cell flags identify local species that dust may collide with.
 	cellFlags map[uint64]uint8
 
 	// Impulse accumulators keyed by target entity
 	impulses map[core.Entity]impulseAcc
-
-	// Combat composite headers for member->header routing
-	combatHeaders map[core.Entity]bool
 }
 
 type impulseAcc struct {
@@ -97,7 +91,7 @@ func NewDustSystem(world *engine.World) engine.System {
 	s.statWallCollisions = world.Resources.Status.Ints.Get("dust.wall_collisions")
 	s.statBoundaryReflections = world.Resources.Status.Ints.Get("dust.boundary_reflections")
 	s.statGridSteps = world.Resources.Status.Ints.Get("dust.grid_steps")
-	s.buffers = newBufferTelemetry(world.Resources.Status, "dust", "death", "transform", "destroy", "flash", "collision_cells", "collision_impulses", "combat_headers")
+	s.buffers = newBufferTelemetry(world.Resources.Status, "dust", "death", "transform", "destroy", "flash", "collision_cells", "collision_impulses")
 
 	s.Init()
 	return s
@@ -109,9 +103,8 @@ func (s *DustSystem) Init() {
 	s.rng = s.world.Rand(s.Name())
 	s.staggerTick = 0
 	s.collisionCtx = collisionContext{
-		cellFlags:     make(map[uint64]uint8, 256),
-		impulses:      make(map[core.Entity]impulseAcc, 16),
-		combatHeaders: make(map[core.Entity]bool, 8),
+		cellFlags: make(map[uint64]uint8, 256),
+		impulses:  make(map[core.Entity]impulseAcc, 16),
 	}
 	s.deathBuf = make([]core.Entity, 0, 32)
 	s.transformBuf = make([]glyphTransform, 0, 256)
@@ -427,19 +420,6 @@ func (s *DustSystem) Update() {
 						continue
 					}
 
-					// --- Combat Composite ---
-					if flags&cellFlagCombatComposite != 0 {
-						if member, ok := s.world.Components.Member.GetPtr(target); ok {
-							if collisionCtx.combatHeaders[member.HeaderEntity] {
-								impulseX, impulseY := physics.ImpulseFromProfile(
-									kineticComp.VelX, kineticComp.VelY,
-									&profile.DustToComposite, s.rng,
-								)
-								collisionCtx.accumulateImpulse(member.HeaderEntity, impulseX, impulseY)
-							}
-						}
-						continue
-					}
 				}
 			}
 
@@ -492,7 +472,6 @@ func (s *DustSystem) buildCollisionContext() *collisionContext {
 	ctx := &s.collisionCtx
 	clear(ctx.cellFlags)
 	clear(ctx.impulses)
-	clear(ctx.combatHeaders)
 
 	// Drains
 	for _, e := range s.world.Components.Drain.Entities() {
@@ -501,29 +480,7 @@ func (s *DustSystem) buildCollisionContext() *collisionContext {
 		}
 	}
 
-	// Combat composites (Quasar, Swarm, future Storm)
-	for _, headerEntity := range s.world.Components.Header.Entities() {
-		header, ok := s.world.Components.Header.GetPtr(headerEntity)
-		if !ok {
-			continue
-		}
-
-		// Only combat-capable composites
-		switch header.Behavior {
-		case component.BehaviorQuasar, component.BehaviorSwarm, component.BehaviorStorm:
-			ctx.combatHeaders[headerEntity] = true
-			for _, member := range header.MemberEntries {
-				if member.Entity == 0 {
-					continue
-				}
-				if pos, ok := s.world.Positions.GetPosition(member.Entity); ok {
-					ctx.cellFlags[posKey(pos.X, pos.Y)] |= cellFlagCombatComposite
-				}
-			}
-		}
-	}
 	s.buffers.Observe(4, len(ctx.cellFlags))
-	s.buffers.Observe(6, len(ctx.combatHeaders))
 
 	return ctx
 }

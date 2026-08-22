@@ -20,6 +20,11 @@ type CombatSystem struct {
 	// Random source for knockback impulse randomization
 	rng *vmath.FastRand
 
+	// Dust explosions cross the player/shared boundary as geometry. These
+	// buffers collect shared targets before normal area attacks are queued.
+	dustExplosionBuf []hitComposite
+	dustExplosionIdx map[core.Entity]int
+
 	// Telemetry
 	statActive        *atomic.Bool
 	statCount         *atomic.Int64
@@ -109,6 +114,8 @@ func NewCombatSystem(world *engine.World) engine.System {
 
 func (s *CombatSystem) Init() {
 	s.rng = s.world.Rand(s.Name())
+	s.dustExplosionBuf = make([]hitComposite, 0, 16)
+	s.dustExplosionIdx = make(map[core.Entity]int, 16)
 	s.statActive.Store(false)
 	s.statCount.Store(0)
 	s.statDirect.Store(0)
@@ -156,6 +163,7 @@ func (s *CombatSystem) Priority() int {
 
 func (s *CombatSystem) EventTypes() []event.EventType {
 	return []event.EventType{
+		event.EventDustExplosionRequest,
 		event.EventCombatAttackDirectRequest,
 		event.EventCombatAttackAreaRequest,
 		event.EventCombatHealRequest,
@@ -179,7 +187,8 @@ func (s *CombatSystem) HandleEvent(ev event.GameEvent) {
 	}
 
 	if !s.enabled {
-		if ev.Type == event.EventCombatAttackDirectRequest ||
+		if ev.Type == event.EventDustExplosionRequest ||
+			ev.Type == event.EventCombatAttackDirectRequest ||
 			ev.Type == event.EventCombatAttackAreaRequest ||
 			ev.Type == event.EventCombatHealRequest {
 			s.statDisabled.Add(1)
@@ -188,6 +197,11 @@ func (s *CombatSystem) HandleEvent(ev event.GameEvent) {
 	}
 
 	switch ev.Type {
+	case event.EventDustExplosionRequest:
+		if payload, ok := ev.Payload.(*event.DustExplosionRequestPayload); ok {
+			s.applyDustExplosion(payload)
+		}
+
 	case event.EventCombatAttackDirectRequest:
 		if payload, ok := ev.Payload.(*event.CombatAttackDirectRequestPayload); ok {
 			s.applyHitDirect(payload)
@@ -202,6 +216,121 @@ func (s *CombatSystem) HandleEvent(ev event.GameEvent) {
 		if payload, ok := ev.Payload.(*event.CombatHealRequestPayload); ok {
 			s.applyHeal(payload)
 		}
+	}
+}
+
+// applyDustExplosion resolves the dedicated Bus mechanic against shared combat
+// species only, then returns to the ordinary area-attack path. The explicit
+// allow-list is temporary until entity domains can replace it with a domain
+// filter.
+func (s *CombatSystem) applyDustExplosion(payload *event.DustExplosionRequestPayload) {
+	ownerCursor := s.world.ResolveCursor(payload.OwnerCursor)
+	if ownerCursor == 0 {
+		s.statCursor.Add(1)
+		return
+	}
+	if payload.Radius <= 0 || payload.AttackType < 0 || payload.AttackType >= component.CombatAttackTypeCount {
+		s.statUnprofiled.Add(1)
+		return
+	}
+
+	config := s.world.Resources.Config
+	radiusCells := int(payload.Radius)
+	radiusCellsY := radiusCells / 2
+	minX := max(0, payload.CenterX-radiusCells)
+	maxX := min(config.MapWidth-1, payload.CenterX+radiusCells)
+	minY := max(0, payload.CenterY-radiusCellsY)
+	maxY := min(config.MapHeight-1, payload.CenterY+radiusCellsY)
+	radiusSq := payload.Radius * payload.Radius
+
+	s.dustExplosionBuf = s.dustExplosionBuf[:0]
+	clear(s.dustExplosionIdx)
+
+	var entityBuf [parameter.MaxEntitiesPerCell]core.Entity
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			dx := float64(x - payload.CenterX)
+			dy := vmath.ScaleToCircularF(float64(y - payload.CenterY))
+			if vmath.CircleDistSqF(dx, dy) > radiusSq {
+				continue
+			}
+
+			count := s.world.Positions.GetAllEntitiesAtInto(x, y, entityBuf[:])
+			for i := range count {
+				entity := entityBuf[i]
+				member, isMember := s.world.Components.Member.GetPtr(entity)
+				if isMember {
+					s.collectDustExplosionMember(member.HeaderEntity, entity)
+					continue
+				}
+
+				// Headers are represented by their member hitboxes. The fallback
+				// covers any simple shared combat species added before domains land.
+				if s.world.Components.Header.HasEntity(entity) {
+					continue
+				}
+				combatComp, ok := s.world.Components.Combat.GetPtr(entity)
+				if !ok || !isSharedCombatType(combatComp.CombatEntityType) {
+					continue
+				}
+				s.dustExplosionIdx[entity] = len(s.dustExplosionBuf)
+				s.dustExplosionBuf = append(s.dustExplosionBuf, hitComposite{
+					header:  entity,
+					members: []core.Entity{entity},
+				})
+			}
+		}
+	}
+
+	for i := range s.dustExplosionBuf {
+		hit := &s.dustExplosionBuf[i]
+		s.world.PushEvent(event.EventCombatAttackAreaRequest, &event.CombatAttackAreaRequestPayload{
+			AttackType:   payload.AttackType,
+			OwnerEntity:  ownerCursor,
+			OriginEntity: ownerCursor,
+			TargetEntity: hit.header,
+			HitEntities:  hit.members,
+			HasOrigin:    true,
+			OriginX:      payload.CenterX,
+			OriginY:      payload.CenterY,
+		})
+	}
+}
+
+func (s *CombatSystem) collectDustExplosionMember(headerEntity, memberEntity core.Entity) {
+	header, ok := s.world.Components.Header.GetPtr(headerEntity)
+	if !ok || (header.Type != component.CompositeTypeUnit && header.Type != component.CompositeTypeAblative) {
+		return
+	}
+	combatComp, ok := s.world.Components.Combat.GetPtr(headerEntity)
+	if !ok || !isSharedCombatType(combatComp.CombatEntityType) {
+		return
+	}
+
+	if idx, ok := s.dustExplosionIdx[headerEntity]; ok {
+		s.dustExplosionBuf[idx].members = append(s.dustExplosionBuf[idx].members, memberEntity)
+		return
+	}
+	s.dustExplosionIdx[headerEntity] = len(s.dustExplosionBuf)
+	s.dustExplosionBuf = append(s.dustExplosionBuf, hitComposite{
+		header:  headerEntity,
+		members: []core.Entity{memberEntity},
+	})
+}
+
+func isSharedCombatType(combatType component.CombatEntityType) bool {
+	switch combatType {
+	case component.CombatEntityQuasar,
+		component.CombatEntitySwarm,
+		component.CombatEntityStorm,
+		component.CombatEntityPylon,
+		component.CombatEntitySnakeHead,
+		component.CombatEntitySnakeBody,
+		component.CombatEntityEye,
+		component.CombatEntityTower:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -26,6 +26,7 @@ reader can start with the application shape and then descend into a subsystem.
 | [Rendering](rendering.md) | Domain detail | How are ECS state, compositing, color modes, masks, post-processing, and terminal output connected? |
 | [Audio](audio.md) | Domain detail | How are effects synthesized, music sequenced, APM mapped to arrangements, and backends selected? |
 | [AI, navigation, physics, and evolution](ai-physics-and-evolution.md) | Domain detail | How do flow fields, route learning, genetics, float64 geometry, and collision/steering work together? |
+| [Domain Phase 2 audit](domain-phase-2-audit.md) | Migration audit | Which cursor writes, local-player reads, spatial queries, RNG streams, events, and runtime assumptions must be classified before domains are introduced? |
 | [Content, assets, and tools](content-assets-and-tools.md) | Domain detail | How are corpora and embedded assets resolved, parsed, validated, and authored? |
 | [Services and networking](services-and-networking.md) | Domain detail | How are I/O resources managed, and what networking code is implemented versus actually wired? |
 | [Development and operations](development.md) | Operational detail | How is the project built, generated, tested, diagnosed, and deployed on native and WASM targets? |
