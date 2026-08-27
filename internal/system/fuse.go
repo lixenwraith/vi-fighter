@@ -192,13 +192,13 @@ func (s *FuseSystem) effectMaterialize(area vmath.Area) {
 
 // killDrains reports and retires the consumed drains; the batch is domain-pure, so a
 // shared record never names a player entity.
-func (s *FuseSystem) killDrains(drains []core.Entity) {
-	if len(drains) == 0 {
+func (s *FuseSystem) killDrains(consumed []core.Entity) {
+	if len(consumed) == 0 {
 		return
 	}
 	// TODO(phase6): EmitDeath bypasses PushEvent, so the tag does not reach the death record yet.
 	s.world.WithDomain(core.DomainPlayer, func() {
-		for _, drainEntity := range drains {
+		for _, drainEntity := range consumed {
 			killX, killY := -1, -1
 			if pos, ok := s.world.Positions.GetPosition(drainEntity); ok {
 				killX, killY = pos.X, pos.Y
@@ -210,7 +210,7 @@ func (s *FuseSystem) killDrains(drains []core.Entity) {
 				Y:       killY,
 			})
 		}
-		event.EmitDeath(s.world.Resources.Event.Queue, 0, drains...)
+		event.EmitDeath(s.world.Resources.Event.Queue, 0, consumed...)
 	})
 }
 

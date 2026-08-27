@@ -1,5 +1,7 @@
 package manifest
 
+import "github.com/lixenwraith/vi-fighter/internal/engine"
+
 // ComponentDef defines a component for registration and store generation
 type ComponentDef struct {
 	Field string // ComponentStore field name (e.g., "Drain")
@@ -11,6 +13,7 @@ type ComponentDef struct {
 type SystemDef struct {
 	Name        string // Registry key (e.g., "drain")
 	Constructor string // Constructor name without package (e.g., "NewDrainSystem")
+	Domain      engine.SystemDomain
 }
 
 // RendererDef defines a renderer for registration
@@ -96,83 +99,83 @@ var Components = []ComponentDef{
 // Generator produces: RegisterSystems(), ActiveSystems()
 var Systems = []SystemDef{
 	// --- Core / Frame Setup ---
-	{"cursor", "NewCursorSystem"},
-	{"ping", "NewPingSystem"},
-	{"transient", "NewTransientSystem"},
-	{"camera", "NewCameraSystem"},
+	{"cursor", "NewCursorSystem", engine.SystemShared},
+	{"ping", "NewPingSystem", engine.SystemShared},
+	{"transient", "NewTransientSystem", engine.SystemPlayer},
+	{"camera", "NewCameraSystem", engine.SystemPlayer},
 
 	// --- Player State ---
-	{"energy", "NewEnergySystem"},
-	{"shield", "NewShieldSystem"},
-	{"heat", "NewHeatSystem"},
-	{"boost", "NewBoostSystem"},
-	{"weapon", "NewWeaponSystem"},
+	{"energy", "NewEnergySystem", engine.SystemShared},
+	{"shield", "NewShieldSystem", engine.SystemShared},
+	{"heat", "NewHeatSystem", engine.SystemShared},
+	{"boost", "NewBoostSystem", engine.SystemShared},
+	{"weapon", "NewWeaponSystem", engine.SystemDual},
 
 	// --- Input Processing ---
-	{"typing", "NewTypingSystem"},
+	{"typing", "NewTypingSystem", engine.SystemDual},
 
 	// --- Composite / Structure ---
-	{"composite", "NewCompositeSystem"},
-	{"wall", "NewWallSystem"},
-	{"tower", "NewTowerSystem"},
-	{"gateway", "NewGatewaySystem"},
+	{"composite", "NewCompositeSystem", engine.SystemShared},
+	{"wall", "NewWallSystem", engine.SystemDual},
+	{"tower", "NewTowerSystem", engine.SystemShared},
+	{"gateway", "NewGatewaySystem", engine.SystemShared},
 
 	// --- Entity Behaviors ---
-	{"loot", "NewLootSystem"},
-	{"glyph", "NewGlyphSystem"},
-	{"nugget", "NewNuggetSystem"},
-	{"decay", "NewDecaySystem"},
-	{"blossom", "NewBlossomSystem"},
-	{"gold", "NewGoldSystem"},
+	{"loot", "NewLootSystem", engine.SystemPlayer},
+	{"glyph", "NewGlyphSystem", engine.SystemPlayer},
+	{"nugget", "NewNuggetSystem", engine.SystemShared},
+	{"decay", "NewDecaySystem", engine.SystemPlayer},
+	{"blossom", "NewBlossomSystem", engine.SystemPlayer},
+	{"gold", "NewGoldSystem", engine.SystemShared},
 
 	// --- Spawning / Materialize ---
-	{"materialize", "NewMaterializeSystem"},
-	{"cleaner", "NewCleanerSystem"},
-	{"fuse", "NewFuseSystem"},
-	{"spirit", "NewSpiritSystem"},
+	{"materialize", "NewMaterializeSystem", engine.SystemDual},
+	{"cleaner", "NewCleanerSystem", engine.SystemDual},
+	{"fuse", "NewFuseSystem", engine.SystemPlayer},
+	{"spirit", "NewSpiritSystem", engine.SystemDual},
 
 	// --- Projectiles ---
-	{"lightning", "NewLightningSystem"},
-	{"missile", "NewMissileSystem"},
+	{"lightning", "NewLightningSystem", engine.SystemPlayer},
+	{"missile", "NewMissileSystem", engine.SystemPlayer},
 
 	// --- Movement / Collision ---
-	{"navigation", "NewNavigationSystem"},
-	{"soft_collision", "NewSoftCollisionSystem"},
+	{"navigation", "NewNavigationSystem", engine.SystemDual},
+	{"soft_collision", "NewSoftCollisionSystem", engine.SystemDual},
 
 	// --- Combat ---
-	{"combat", "NewCombatSystem"},
+	{"combat", "NewCombatSystem", engine.SystemDual},
 
 	// --- Species ---
-	{"drain", "NewDrainSystem"},
-	{"quasar", "NewQuasarSystem"},
-	{"swarm", "NewSwarmSystem"},
-	{"storm", "NewStormSystem"},
-	{"pylon", "NewPylonSystem"},
-	{"snake", "NewSnakeSystem"},
-	{"eye", "NewEyeSystem"},
-	{"bullet", "NewBulletSystem"},
+	{"drain", "NewDrainSystem", engine.SystemPlayer},
+	{"quasar", "NewQuasarSystem", engine.SystemDual},
+	{"swarm", "NewSwarmSystem", engine.SystemDual},
+	{"storm", "NewStormSystem", engine.SystemDual},
+	{"pylon", "NewPylonSystem", engine.SystemShared},
+	{"snake", "NewSnakeSystem", engine.SystemDual},
+	{"eye", "NewEyeSystem", engine.SystemDual},
+	{"bullet", "NewBulletSystem", engine.SystemPlayer},
 
 	// --- Particles / Effects ---
-	{"dust", "NewDustSystem"},
-	{"flash", "NewFlashSystem"},
-	{"fadeout", "NewFadeoutSystem"},
-	{"marker", "NewMarkerSystem"},
-	{"explosion", "NewExplosionSystem"},
-	{"motion_marker", "NewMotionMarkerSystem"},
-	{"splash", "NewSplashSystem"},
+	{"dust", "NewDustSystem", engine.SystemPlayer},
+	{"flash", "NewFlashSystem", engine.SystemPlayer},
+	{"fadeout", "NewFadeoutSystem", engine.SystemPlayer},
+	{"marker", "NewMarkerSystem", engine.SystemShared},
+	{"explosion", "NewExplosionSystem", engine.SystemShared},
+	{"motion_marker", "NewMotionMarkerSystem", engine.SystemPlayer},
+	{"splash", "NewSplashSystem", engine.SystemPlayer},
 
 	// --- Environment ---
-	{"environment", "NewEnvironmentSystem"},
+	{"environment", "NewEnvironmentSystem", engine.SystemShared},
 
 	// --- Lifecycle ---
-	{"death", "NewDeathSystem"},
-	{"timer", "NewTimerSystem"},
-	{"adaptation", "NewAdaptationSystem"},
-	{"genetic", "NewGeneticSystem"},
+	{"death", "NewDeathSystem", engine.SystemDual},
+	{"timekeeper", "NewTimerSystem", engine.SystemDual},
+	{"adaptation", "NewAdaptationSystem", engine.SystemShared},
+	{"genetic", "NewGeneticSystem", engine.SystemShared},
 
 	// --- Audio ---
-	{"audio", "NewAudioSystem"},
-	{"music", "NewMusicSystem"},
+	{"audio", "NewAudioSystem", engine.SystemPlayer},
+	{"music", "NewMusicSystem", engine.SystemPlayer},
 }
 
 // Renderers is the authoritative renderer list

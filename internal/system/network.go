@@ -30,6 +30,9 @@ func (s *NetworkSystem) Init() { s.enabled = true }
 
 func (s *NetworkSystem) Name() string { return "network" }
 
+// Domain returns the system's state boundary.
+func (s *NetworkSystem) Domain() engine.SystemDomain { return engine.SystemPlayer }
+
 // Priority: inbound translation before gameplay logic consumes events
 // Stub value; finalize with protocol work
 func (s *NetworkSystem) Priority() int { return parameter.PriorityUI }

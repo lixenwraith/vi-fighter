@@ -68,6 +68,7 @@ func (s *MetaSystem) Init() {
 	s.statCameraY.Store(0)
 	s.statPlayerX.Reset()
 	s.statPlayerY.Reset()
+	s.world.Resources.Status.Bools.Get("context.map_locked").Store(false)
 	s.resetKills()
 }
 
@@ -75,6 +76,9 @@ func (s *MetaSystem) Init() {
 func (s *MetaSystem) Name() string {
 	return "meta"
 }
+
+// Domain returns the system's state boundary.
+func (s *MetaSystem) Domain() engine.SystemDomain { return engine.SystemDual }
 
 // Priority returns the system's priority
 func (s *MetaSystem) Priority() int {

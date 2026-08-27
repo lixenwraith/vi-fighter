@@ -260,7 +260,7 @@ func (s *DecaySystem) updateDecayEntities() {
 				continue
 			}
 
-			n := s.world.Positions.GetAllEntitiesAtInto(x, y, collisionBuf[:])
+			n := s.world.Positions.GetEntitiesAtInto(x, y, engine.ScopePlayer, collisionBuf[:])
 			for i := range n {
 				target := collisionBuf[i]
 				if target == 0 || target == entity {

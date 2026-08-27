@@ -32,7 +32,6 @@ var componentDomains = map[uint64]componentRule{
 	CursorViewBit:   {"cursor_view", core.DomainShared}, // Shared cursor view, written by one instance
 	PingBit:         {"ping", core.DomainShared},
 	PulseBit:        {"pulse", core.DomainShared},
-	SpiritBit:       {"spirit", core.DomainShared},
 	MarkerBit:       {"marker", core.DomainShared},
 	GenotypeBit:     {"genotype", core.DomainShared},
 	TargetBit:       {"target", core.DomainShared},
