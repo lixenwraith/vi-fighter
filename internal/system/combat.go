@@ -152,6 +152,14 @@ func (s *CombatSystem) Name() string {
 	return "combat"
 }
 
+// Domain reports dual: it holds one stream per domain and selects by the target's domain (D-8).
+func (s *CombatSystem) Domain() engine.SystemDomain { return engine.SystemDual }
+
+// Requires the death pipeline every kill routes through.
+func (s *CombatSystem) Requires() engine.SystemDependencies {
+	return engine.Require("death")
+}
+
 func (s *CombatSystem) Priority() int {
 	return parameter.PriorityCombat
 }

@@ -76,6 +76,12 @@ func (s *MetaSystem) Name() string {
 	return "meta"
 }
 
+// Domain reports shared: it publishes shared kill counters and map bounds and writes no component store.
+func (s *MetaSystem) Domain() engine.SystemDomain { return engine.SystemShared }
+
+// Requires nothing: it publishes context and kill counters.
+func (s *MetaSystem) Requires() engine.SystemDependencies { return nil }
+
 // Priority returns the system's priority
 func (s *MetaSystem) Priority() int {
 	return parameter.PriorityUI
