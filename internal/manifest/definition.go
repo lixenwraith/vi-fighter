@@ -8,12 +8,13 @@ type ComponentDef struct {
 	Type  string // Type name without package (e.g., "DrainComponent")
 }
 
-// SystemDef defines a system for registration
-// Order in slice determines ActiveSystems() order
+// SystemDef declares one system's identity, domain and construction edges.
 type SystemDef struct {
 	Name        string // Registry key (e.g., "drain")
 	Constructor string // Constructor name without package (e.g., "NewDrainSystem")
 	Domain      engine.SystemDomain
+	Required    []string // Must be registered and enabled.
+	Optional    []string // Orders construction when present.
 }
 
 // RendererDef defines a renderer for registration
@@ -94,88 +95,87 @@ var Components = []ComponentDef{
 	{"Timer", "TimerComponent"},
 }
 
-// Systems is the authoritative system list
-// Order determined by priority in parameters
-// Generator produces: RegisterSystems(), ActiveSystems()
+// Systems is the authoritative system profile list.
+// Slice order breaks equal-priority tick ties; dependencies order construction.
 var Systems = []SystemDef{
 	// --- Core / Frame Setup ---
-	{"cursor", "NewCursorSystem", engine.SystemShared},
-	{"ping", "NewPingSystem", engine.SystemShared},
-	{"transient", "NewTransientSystem", engine.SystemPlayer},
-	{"camera", "NewCameraSystem", engine.SystemPlayer},
+	{"cursor", "NewCursorSystem", engine.SystemShared, nil, nil},
+	{"ping", "NewPingSystem", engine.SystemShared, []string{"cursor"}, nil},
+	{"transient", "NewTransientSystem", engine.SystemPlayer, nil, nil},
+	{"camera", "NewCameraSystem", engine.SystemPlayer, []string{"cursor"}, nil},
 
 	// --- Player State ---
-	{"energy", "NewEnergySystem", engine.SystemShared},
-	{"shield", "NewShieldSystem", engine.SystemShared},
-	{"heat", "NewHeatSystem", engine.SystemShared},
-	{"boost", "NewBoostSystem", engine.SystemShared},
-	{"weapon", "NewWeaponSystem", engine.SystemDual},
+	{"energy", "NewEnergySystem", engine.SystemShared, []string{"cursor"}, nil},
+	{"shield", "NewShieldSystem", engine.SystemShared, []string{"cursor", "energy"}, nil},
+	{"heat", "NewHeatSystem", engine.SystemShared, []string{"cursor"}, nil},
+	{"boost", "NewBoostSystem", engine.SystemShared, []string{"cursor"}, nil},
+	{"weapon", "NewWeaponSystem", engine.SystemDual, []string{"cursor"}, []string{"combat", "cleaner", "missile", "energy"}},
 
 	// --- Input Processing ---
-	{"typing", "NewTypingSystem", engine.SystemDual},
+	{"typing", "NewTypingSystem", engine.SystemDual, []string{"cursor"}, []string{"glyph", "death", "energy", "heat", "boost", "composite", "audio"}},
 
 	// --- Composite / Structure ---
-	{"composite", "NewCompositeSystem", engine.SystemShared},
-	{"wall", "NewWallSystem", engine.SystemDual},
-	{"tower", "NewTowerSystem", engine.SystemShared},
-	{"gateway", "NewGatewaySystem", engine.SystemShared},
+	{"composite", "NewCompositeSystem", engine.SystemShared, []string{"death"}, nil},
+	{"wall", "NewWallSystem", engine.SystemDual, nil, []string{"cursor", "death", "fadeout"}},
+	{"tower", "NewTowerSystem", engine.SystemShared, []string{"composite", "combat", "death"}, []string{"navigation"}},
+	{"gateway", "NewGatewaySystem", engine.SystemShared, nil, []string{"navigation", "eye", "snake"}},
 
 	// --- Entity Behaviors ---
-	{"loot", "NewLootSystem", engine.SystemPlayer},
-	{"glyph", "NewGlyphSystem", engine.SystemPlayer},
-	{"nugget", "NewNuggetSystem", engine.SystemShared},
-	{"decay", "NewDecaySystem", engine.SystemPlayer},
-	{"blossom", "NewBlossomSystem", engine.SystemPlayer},
-	{"gold", "NewGoldSystem", engine.SystemShared},
+	{"loot", "NewLootSystem", engine.SystemPlayer, []string{"cursor"}, []string{"death", "energy", "heat", "weapon", "flash"}},
+	{"glyph", "NewGlyphSystem", engine.SystemPlayer, nil, []string{"wall"}},
+	{"nugget", "NewNuggetSystem", engine.SystemShared, nil, []string{"cursor", "cleaner", "energy", "heat", "audio"}},
+	{"decay", "NewDecaySystem", engine.SystemPlayer, []string{"death"}, []string{"glyph", "flash", "wall"}},
+	{"blossom", "NewBlossomSystem", engine.SystemPlayer, []string{"death"}, []string{"glyph", "wall"}},
+	{"gold", "NewGoldSystem", engine.SystemShared, []string{"cursor", "composite"}, []string{"energy", "splash", "audio", "death"}},
 
 	// --- Spawning / Materialize ---
-	{"materialize", "NewMaterializeSystem", engine.SystemDual},
-	{"cleaner", "NewCleanerSystem", engine.SystemDual},
-	{"fuse", "NewFuseSystem", engine.SystemPlayer},
-	{"spirit", "NewSpiritSystem", engine.SystemDual},
+	{"materialize", "NewMaterializeSystem", engine.SystemDual, nil, nil},
+	{"cleaner", "NewCleanerSystem", engine.SystemDual, []string{"cursor"}, []string{"combat", "decay", "blossom", "audio"}},
+	{"fuse", "NewFuseSystem", engine.SystemPlayer, []string{"drain"}, []string{"materialize", "spirit", "quasar", "swarm"}},
+	{"spirit", "NewSpiritSystem", engine.SystemDual, nil, nil},
 
 	// --- Projectiles ---
-	{"lightning", "NewLightningSystem", engine.SystemPlayer},
-	{"missile", "NewMissileSystem", engine.SystemPlayer},
+	{"lightning", "NewLightningSystem", engine.SystemPlayer, nil, nil},
+	{"missile", "NewMissileSystem", engine.SystemPlayer, []string{"explosion"}, []string{"combat", "wall"}},
 
 	// --- Movement / Collision ---
-	{"navigation", "NewNavigationSystem", engine.SystemDual},
-	{"soft_collision", "NewSoftCollisionSystem", engine.SystemDual},
+	{"navigation", "NewNavigationSystem", engine.SystemDual, nil, []string{"cursor", "wall"}},
+	{"soft_collision", "NewSoftCollisionSystem", engine.SystemDual, nil, []string{"drain", "quasar", "swarm", "storm", "pylon"}},
 
 	// --- Combat ---
-	{"combat", "NewCombatSystem", engine.SystemDual},
+	{"combat", "NewCombatSystem", engine.SystemDual, nil, []string{"cursor", "energy", "lightning"}},
 
 	// --- Species ---
-	{"drain", "NewDrainSystem", engine.SystemPlayer},
-	{"quasar", "NewQuasarSystem", engine.SystemDual},
-	{"swarm", "NewSwarmSystem", engine.SystemDual},
-	{"storm", "NewStormSystem", engine.SystemDual},
-	{"pylon", "NewPylonSystem", engine.SystemShared},
-	{"snake", "NewSnakeSystem", engine.SystemDual},
-	{"eye", "NewEyeSystem", engine.SystemDual},
-	{"bullet", "NewBulletSystem", engine.SystemPlayer},
+	{"drain", "NewDrainSystem", engine.SystemPlayer, []string{"cursor"}, []string{"combat", "materialize", "death", "flash", "dust"}},
+	{"quasar", "NewQuasarSystem", engine.SystemDual, []string{"composite", "combat", "death"}, []string{"navigation", "lightning", "splash", "flash"}},
+	{"swarm", "NewSwarmSystem", engine.SystemDual, []string{"composite", "combat", "death"}, []string{"navigation"}},
+	{"storm", "NewStormSystem", engine.SystemDual, []string{"composite", "combat", "death"}, []string{"navigation", "bullet", "materialize", "flash"}},
+	{"pylon", "NewPylonSystem", engine.SystemShared, []string{"composite", "combat", "death"}, []string{"navigation"}},
+	{"snake", "NewSnakeSystem", engine.SystemDual, []string{"composite", "combat", "death"}, []string{"navigation", "flash"}},
+	{"eye", "NewEyeSystem", engine.SystemDual, []string{"composite", "combat", "death"}, []string{"navigation", "explosion"}},
+	{"bullet", "NewBulletSystem", engine.SystemPlayer, []string{"cursor"}, []string{"shield", "heat"}},
 
 	// --- Particles / Effects ---
-	{"dust", "NewDustSystem", engine.SystemPlayer},
-	{"flash", "NewFlashSystem", engine.SystemPlayer},
-	{"fadeout", "NewFadeoutSystem", engine.SystemPlayer},
-	{"marker", "NewMarkerSystem", engine.SystemShared},
-	{"explosion", "NewExplosionSystem", engine.SystemShared},
-	{"motion_marker", "NewMotionMarkerSystem", engine.SystemPlayer},
-	{"splash", "NewSplashSystem", engine.SystemPlayer},
+	{"dust", "NewDustSystem", engine.SystemPlayer, []string{"explosion"}, []string{"flash", "death"}},
+	{"flash", "NewFlashSystem", engine.SystemPlayer, nil, nil},
+	{"fadeout", "NewFadeoutSystem", engine.SystemPlayer, nil, nil},
+	{"marker", "NewMarkerSystem", engine.SystemShared, nil, nil},
+	{"explosion", "NewExplosionSystem", engine.SystemShared, nil, []string{"combat"}},
+	{"motion_marker", "NewMotionMarkerSystem", engine.SystemPlayer, []string{"cursor"}, []string{"glyph"}},
+	{"splash", "NewSplashSystem", engine.SystemPlayer, []string{"cursor"}, nil},
 
 	// --- Environment ---
-	{"environment", "NewEnvironmentSystem", engine.SystemShared},
+	{"environment", "NewEnvironmentSystem", engine.SystemShared, nil, nil},
 
 	// --- Lifecycle ---
-	{"death", "NewDeathSystem", engine.SystemDual},
-	{"timekeeper", "NewTimerSystem", engine.SystemDual},
-	{"adaptation", "NewAdaptationSystem", engine.SystemShared},
-	{"genetic", "NewGeneticSystem", engine.SystemShared},
+	{"death", "NewDeathSystem", engine.SystemDual, nil, nil},
+	{"timekeeper", "NewTimerSystem", engine.SystemDual, []string{"death"}, nil},
+	{"adaptation", "NewAdaptationSystem", engine.SystemShared, []string{"navigation"}, []string{"gateway"}},
+	{"genetic", "NewGeneticSystem", engine.SystemShared, nil, []string{"combat", "eye"}},
 
 	// --- Audio ---
-	{"audio", "NewAudioSystem", engine.SystemPlayer},
-	{"music", "NewMusicSystem", engine.SystemPlayer},
+	{"audio", "NewAudioSystem", engine.SystemPlayer, nil, nil},
+	{"music", "NewMusicSystem", engine.SystemPlayer, nil, []string{"audio"}},
 }
 
 // Renderers is the authoritative renderer list

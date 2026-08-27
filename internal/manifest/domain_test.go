@@ -17,7 +17,10 @@ import (
 func TestSystemDomainsMatchManifest(t *testing.T) {
 	w := engine.NewWorld()
 	engine.NewGameContextWithClock(w, 80, 24, engine.NewManualClock())
-	systems := BuildSystems(w)
+	systems, err := BuildSystems(w)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if w.Resources.Genetics != nil {
 		defer w.Resources.Genetics.Registry.Stop()
 	}
@@ -40,6 +43,33 @@ func TestSystemDomainsMatchManifest(t *testing.T) {
 	}
 	if got := (&system.NetworkSystem{}).Domain(); got != engine.SystemPlayer {
 		t.Errorf("network domain = %s, want player", got)
+	}
+}
+
+func TestSystemDependencyNamesRegistered(t *testing.T) {
+	registered := make(map[string]bool, len(Systems))
+	for _, def := range Systems {
+		if registered[def.Name] {
+			t.Fatalf("duplicate system name %q", def.Name)
+		}
+		registered[def.Name] = true
+	}
+
+	for _, def := range Systems {
+		seen := make(map[string]string, len(def.Required)+len(def.Optional))
+		check := func(strength string, dependencies []string) {
+			for _, dependency := range dependencies {
+				if !registered[dependency] {
+					t.Errorf("system %q has unregistered %s dependency %q", def.Name, strength, dependency)
+				}
+				if previous := seen[dependency]; previous != "" {
+					t.Errorf("system %q declares %q as both %s and %s", def.Name, dependency, previous, strength)
+				}
+				seen[dependency] = strength
+			}
+		}
+		check("required", def.Required)
+		check("optional", def.Optional)
 	}
 }
 

@@ -33,6 +33,11 @@ func (s *NetworkSystem) Name() string { return "network" }
 // Domain returns the system's state boundary.
 func (s *NetworkSystem) Domain() engine.SystemDomain { return engine.SystemPlayer }
 
+// Dependencies returns the system's declared requirements.
+func (s *NetworkSystem) Dependencies() engine.SystemDependencies {
+	return engine.SystemDependencies{}
+}
+
 // Priority: inbound translation before gameplay logic consumes events
 // Stub value; finalize with protocol work
 func (s *NetworkSystem) Priority() int { return parameter.PriorityUI }

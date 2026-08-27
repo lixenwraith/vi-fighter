@@ -27,11 +27,18 @@ func (d SystemDomain) String() string {
 	}
 }
 
+// SystemDependencies separates hard requirements from graceful integrations.
+type SystemDependencies struct {
+	Required []string
+	Optional []string
+}
+
 // System is implemented by every game system.
 type System interface {
 	Init()
 	Priority() int // Lower values run first
 	Name() string
 	Domain() SystemDomain
+	Dependencies() SystemDependencies
 	Update()
 }

@@ -9,63 +9,616 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/system"
 )
 
-// BuildSystems constructs every active system in manifest order
-// World.AddSystem sorts by Priority(); the sort is stable, so manifest order
-// breaks ties between systems sharing a priority constant
-func BuildSystems(w *engine.World) []engine.System {
-	return []engine.System{
-		system.NewCursorSystem(w),
-		system.NewPingSystem(w),
-		system.NewTransientSystem(w),
-		system.NewCameraSystem(w),
-		system.NewEnergySystem(w),
-		system.NewShieldSystem(w),
-		system.NewHeatSystem(w),
-		system.NewBoostSystem(w),
-		system.NewWeaponSystem(w),
-		system.NewTypingSystem(w),
-		system.NewCompositeSystem(w),
-		system.NewWallSystem(w),
-		system.NewTowerSystem(w),
-		system.NewGatewaySystem(w),
-		system.NewLootSystem(w),
-		system.NewGlyphSystem(w),
-		system.NewNuggetSystem(w),
-		system.NewDecaySystem(w),
-		system.NewBlossomSystem(w),
-		system.NewGoldSystem(w),
-		system.NewMaterializeSystem(w),
-		system.NewCleanerSystem(w),
-		system.NewFuseSystem(w),
-		system.NewSpiritSystem(w),
-		system.NewLightningSystem(w),
-		system.NewMissileSystem(w),
-		system.NewNavigationSystem(w),
-		system.NewSoftCollisionSystem(w),
-		system.NewCombatSystem(w),
-		system.NewDrainSystem(w),
-		system.NewQuasarSystem(w),
-		system.NewSwarmSystem(w),
-		system.NewStormSystem(w),
-		system.NewPylonSystem(w),
-		system.NewSnakeSystem(w),
-		system.NewEyeSystem(w),
-		system.NewBulletSystem(w),
-		system.NewDustSystem(w),
-		system.NewFlashSystem(w),
-		system.NewFadeoutSystem(w),
-		system.NewMarkerSystem(w),
-		system.NewExplosionSystem(w),
-		system.NewMotionMarkerSystem(w),
-		system.NewSplashSystem(w),
-		system.NewEnvironmentSystem(w),
-		system.NewDeathSystem(w),
-		system.NewTimerSystem(w),
-		system.NewAdaptationSystem(w),
-		system.NewGeneticSystem(w),
-		system.NewAudioSystem(w),
-		system.NewMusicSystem(w),
+// SystemFactories declares every active system in manifest order.
+func SystemFactories(w *engine.World) []engine.SystemFactory {
+	return []engine.SystemFactory{
+		{
+			Name:         "cursor",
+			Domain:       engine.SystemShared,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewCursorSystem(w) },
+		},
+		{
+			Name:   "ping",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+			},
+			Build: func() engine.System { return system.NewPingSystem(w) },
+		},
+		{
+			Name:         "transient",
+			Domain:       engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewTransientSystem(w) },
+		},
+		{
+			Name:   "camera",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+			},
+			Build: func() engine.System { return system.NewCameraSystem(w) },
+		},
+		{
+			Name:   "energy",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+			},
+			Build: func() engine.System { return system.NewEnergySystem(w) },
+		},
+		{
+			Name:   "shield",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+					"energy",
+				},
+			},
+			Build: func() engine.System { return system.NewShieldSystem(w) },
+		},
+		{
+			Name:   "heat",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+			},
+			Build: func() engine.System { return system.NewHeatSystem(w) },
+		},
+		{
+			Name:   "boost",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+			},
+			Build: func() engine.System { return system.NewBoostSystem(w) },
+		},
+		{
+			Name:   "weapon",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+				Optional: []string{
+					"combat",
+					"cleaner",
+					"missile",
+					"energy",
+				},
+			},
+			Build: func() engine.System { return system.NewWeaponSystem(w) },
+		},
+		{
+			Name:   "typing",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+				Optional: []string{
+					"glyph",
+					"death",
+					"energy",
+					"heat",
+					"boost",
+					"composite",
+					"audio",
+				},
+			},
+			Build: func() engine.System { return system.NewTypingSystem(w) },
+		},
+		{
+			Name:   "composite",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"death",
+				},
+			},
+			Build: func() engine.System { return system.NewCompositeSystem(w) },
+		},
+		{
+			Name:   "wall",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"cursor",
+					"death",
+					"fadeout",
+				},
+			},
+			Build: func() engine.System { return system.NewWallSystem(w) },
+		},
+		{
+			Name:   "tower",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"composite",
+					"combat",
+					"death",
+				},
+				Optional: []string{
+					"navigation",
+				},
+			},
+			Build: func() engine.System { return system.NewTowerSystem(w) },
+		},
+		{
+			Name:   "gateway",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"navigation",
+					"eye",
+					"snake",
+				},
+			},
+			Build: func() engine.System { return system.NewGatewaySystem(w) },
+		},
+		{
+			Name:   "loot",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+				Optional: []string{
+					"death",
+					"energy",
+					"heat",
+					"weapon",
+					"flash",
+				},
+			},
+			Build: func() engine.System { return system.NewLootSystem(w) },
+		},
+		{
+			Name:   "glyph",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"wall",
+				},
+			},
+			Build: func() engine.System { return system.NewGlyphSystem(w) },
+		},
+		{
+			Name:   "nugget",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"cursor",
+					"cleaner",
+					"energy",
+					"heat",
+					"audio",
+				},
+			},
+			Build: func() engine.System { return system.NewNuggetSystem(w) },
+		},
+		{
+			Name:   "decay",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"death",
+				},
+				Optional: []string{
+					"glyph",
+					"flash",
+					"wall",
+				},
+			},
+			Build: func() engine.System { return system.NewDecaySystem(w) },
+		},
+		{
+			Name:   "blossom",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"death",
+				},
+				Optional: []string{
+					"glyph",
+					"wall",
+				},
+			},
+			Build: func() engine.System { return system.NewBlossomSystem(w) },
+		},
+		{
+			Name:   "gold",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+					"composite",
+				},
+				Optional: []string{
+					"energy",
+					"splash",
+					"audio",
+					"death",
+				},
+			},
+			Build: func() engine.System { return system.NewGoldSystem(w) },
+		},
+		{
+			Name:         "materialize",
+			Domain:       engine.SystemDual,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewMaterializeSystem(w) },
+		},
+		{
+			Name:   "cleaner",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+				Optional: []string{
+					"combat",
+					"decay",
+					"blossom",
+					"audio",
+				},
+			},
+			Build: func() engine.System { return system.NewCleanerSystem(w) },
+		},
+		{
+			Name:   "fuse",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"drain",
+				},
+				Optional: []string{
+					"materialize",
+					"spirit",
+					"quasar",
+					"swarm",
+				},
+			},
+			Build: func() engine.System { return system.NewFuseSystem(w) },
+		},
+		{
+			Name:         "spirit",
+			Domain:       engine.SystemDual,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewSpiritSystem(w) },
+		},
+		{
+			Name:         "lightning",
+			Domain:       engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewLightningSystem(w) },
+		},
+		{
+			Name:   "missile",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"explosion",
+				},
+				Optional: []string{
+					"combat",
+					"wall",
+				},
+			},
+			Build: func() engine.System { return system.NewMissileSystem(w) },
+		},
+		{
+			Name:   "navigation",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"cursor",
+					"wall",
+				},
+			},
+			Build: func() engine.System { return system.NewNavigationSystem(w) },
+		},
+		{
+			Name:   "soft_collision",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"drain",
+					"quasar",
+					"swarm",
+					"storm",
+					"pylon",
+				},
+			},
+			Build: func() engine.System { return system.NewSoftCollisionSystem(w) },
+		},
+		{
+			Name:   "combat",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"cursor",
+					"energy",
+					"lightning",
+				},
+			},
+			Build: func() engine.System { return system.NewCombatSystem(w) },
+		},
+		{
+			Name:   "drain",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+				Optional: []string{
+					"combat",
+					"materialize",
+					"death",
+					"flash",
+					"dust",
+				},
+			},
+			Build: func() engine.System { return system.NewDrainSystem(w) },
+		},
+		{
+			Name:   "quasar",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"composite",
+					"combat",
+					"death",
+				},
+				Optional: []string{
+					"navigation",
+					"lightning",
+					"splash",
+					"flash",
+				},
+			},
+			Build: func() engine.System { return system.NewQuasarSystem(w) },
+		},
+		{
+			Name:   "swarm",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"composite",
+					"combat",
+					"death",
+				},
+				Optional: []string{
+					"navigation",
+				},
+			},
+			Build: func() engine.System { return system.NewSwarmSystem(w) },
+		},
+		{
+			Name:   "storm",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"composite",
+					"combat",
+					"death",
+				},
+				Optional: []string{
+					"navigation",
+					"bullet",
+					"materialize",
+					"flash",
+				},
+			},
+			Build: func() engine.System { return system.NewStormSystem(w) },
+		},
+		{
+			Name:   "pylon",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"composite",
+					"combat",
+					"death",
+				},
+				Optional: []string{
+					"navigation",
+				},
+			},
+			Build: func() engine.System { return system.NewPylonSystem(w) },
+		},
+		{
+			Name:   "snake",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"composite",
+					"combat",
+					"death",
+				},
+				Optional: []string{
+					"navigation",
+					"flash",
+				},
+			},
+			Build: func() engine.System { return system.NewSnakeSystem(w) },
+		},
+		{
+			Name:   "eye",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"composite",
+					"combat",
+					"death",
+				},
+				Optional: []string{
+					"navigation",
+					"explosion",
+				},
+			},
+			Build: func() engine.System { return system.NewEyeSystem(w) },
+		},
+		{
+			Name:   "bullet",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+				Optional: []string{
+					"shield",
+					"heat",
+				},
+			},
+			Build: func() engine.System { return system.NewBulletSystem(w) },
+		},
+		{
+			Name:   "dust",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"explosion",
+				},
+				Optional: []string{
+					"flash",
+					"death",
+				},
+			},
+			Build: func() engine.System { return system.NewDustSystem(w) },
+		},
+		{
+			Name:         "flash",
+			Domain:       engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewFlashSystem(w) },
+		},
+		{
+			Name:         "fadeout",
+			Domain:       engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewFadeoutSystem(w) },
+		},
+		{
+			Name:         "marker",
+			Domain:       engine.SystemShared,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewMarkerSystem(w) },
+		},
+		{
+			Name:   "explosion",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"combat",
+				},
+			},
+			Build: func() engine.System { return system.NewExplosionSystem(w) },
+		},
+		{
+			Name:   "motion_marker",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+				Optional: []string{
+					"glyph",
+				},
+			},
+			Build: func() engine.System { return system.NewMotionMarkerSystem(w) },
+		},
+		{
+			Name:   "splash",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"cursor",
+				},
+			},
+			Build: func() engine.System { return system.NewSplashSystem(w) },
+		},
+		{
+			Name:         "environment",
+			Domain:       engine.SystemShared,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewEnvironmentSystem(w) },
+		},
+		{
+			Name:         "death",
+			Domain:       engine.SystemDual,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewDeathSystem(w) },
+		},
+		{
+			Name:   "timekeeper",
+			Domain: engine.SystemDual,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"death",
+				},
+			},
+			Build: func() engine.System { return system.NewTimerSystem(w) },
+		},
+		{
+			Name:   "adaptation",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Required: []string{
+					"navigation",
+				},
+				Optional: []string{
+					"gateway",
+				},
+			},
+			Build: func() engine.System { return system.NewAdaptationSystem(w) },
+		},
+		{
+			Name:   "genetic",
+			Domain: engine.SystemShared,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"combat",
+					"eye",
+				},
+			},
+			Build: func() engine.System { return system.NewGeneticSystem(w) },
+		},
+		{
+			Name:         "audio",
+			Domain:       engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{},
+			Build:        func() engine.System { return system.NewAudioSystem(w) },
+		},
+		{
+			Name:   "music",
+			Domain: engine.SystemPlayer,
+			Dependencies: engine.SystemDependencies{
+				Optional: []string{
+					"audio",
+				},
+			},
+			Build: func() engine.System { return system.NewMusicSystem(w) },
+		},
 	}
+}
+
+// BuildSystems constructs in dependency order and returns manifest order.
+func BuildSystems(w *engine.World) ([]engine.System, error) {
+	return engine.BuildSystems(SystemFactories(w))
 }
 
 // BuildRenderers constructs every active renderer paired with its priority

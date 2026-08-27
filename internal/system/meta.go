@@ -80,6 +80,11 @@ func (s *MetaSystem) Name() string {
 // Domain returns the system's state boundary.
 func (s *MetaSystem) Domain() engine.SystemDomain { return engine.SystemDual }
 
+// Dependencies returns the system's declared requirements.
+func (s *MetaSystem) Dependencies() engine.SystemDependencies {
+	return engine.SystemDependencies{Optional: []string{"cursor"}}
+}
+
 // Priority returns the system's priority
 func (s *MetaSystem) Priority() int {
 	return parameter.PriorityUI

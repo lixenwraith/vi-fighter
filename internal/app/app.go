@@ -84,7 +84,9 @@ func (a *App) init() error {
 	if err := a.initServices(); err != nil {
 		return err
 	}
-	a.initWorld()
+	if err := a.initWorld(); err != nil {
+		return err
+	}
 	if err := a.initJournal(); err != nil {
 		return err
 	}
@@ -137,7 +139,7 @@ func (a *App) initServices() error {
 }
 
 // initWorld builds the ECS world, the game context and the system set
-func (a *App) initWorld() {
+func (a *App) initWorld() error {
 	// Services take no world argument, so placement relative to InitAll is free
 	a.world = engine.NewWorld()
 	a.world.Resources.Rand = engine.NewRandResource(a.cfg.Seed)
@@ -196,12 +198,24 @@ func (a *App) initWorld() {
 		a.ctx.TimeCtl.SetScale(s)
 	}
 
-	// Systems; AddSystem sorts by Priority(), manifest order breaks ties
-	for _, sys := range manifest.BuildSystems(a.world) {
+	// Construction follows dependencies; AddSystem preserves priority tick order.
+	metaDependencies := engine.SystemDependencies{Optional: []string{"cursor"}}
+	factories := append(manifest.SystemFactories(a.world), engine.SystemFactory{
+		Name:         "meta",
+		Domain:       engine.SystemDual,
+		Dependencies: metaDependencies,
+		Build:        func() engine.System { return system.NewMetaSystem(a.ctx) },
+	})
+	systems, err := engine.BuildSystems(factories)
+	if err != nil {
+		return fmt.Errorf("initialize systems: %w", err)
+	}
+	for _, sys := range systems {
 		a.world.AddSystem(sys)
 	}
 	// This game's streams are drawn; advance so the next game differs
 	a.world.Resources.Rand.NextSession()
+	return nil
 }
 
 // initPresentation builds the render pipeline. The buffer is terminal-sized while
@@ -246,8 +260,6 @@ func (a *App) initScheduler() error {
 		return err
 	}
 
-	// MetaSystem is context-scoped, so it joins the set here rather than via the manifest
-	a.world.AddSystem(system.NewMetaSystem(a.ctx))
 	for _, sys := range a.world.Systems() {
 		if h, ok := sys.(event.Handler); ok {
 			a.scheduler.RegisterEventHandler(h)
