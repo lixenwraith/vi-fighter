@@ -69,8 +69,9 @@ The detailed construction order is significant:
    initializes the status registry, map/camera config, selected clock, event
    queue, game state, transient state, empty player roster, and target resource.
 7. Publish corpus telemetry now that the status registry exists.
-8. Construct systems from the generated manifest. `World.AddSystem` sorts them
-   by priority and preserves manifest order for equal priorities.
+8. Construct systems in deterministic dependency order from generated
+   factories. Register them in manifest order; `World.AddSystem` sorts by tick
+   priority and preserves manifest order for equal priorities.
 9. For a presenting mode, construct and priority-sort renderers.
 10. Create the input parser and mode router for semantic injection in every
     mode; merge the live keymap and bind terminal mouse control only when the
@@ -79,8 +80,8 @@ The detailed construction order is significant:
 12. Resolve and load the external or embedded FSM, initialize its regions,
     enqueue their entry actions (including the shipped cursor spawn request),
     and apply global/region system toggles.
-13. Register the event-only `MetaSystem`, then every constructed system that
-    implements `event.Handler`.
+13. Register every constructed system that implements `event.Handler` with the
+    scheduler's synchronous event router.
 
 If any step fails, `App.New` calls `Close` on the partially built application.
 Services therefore must make `Stop` idempotent and able to release resources

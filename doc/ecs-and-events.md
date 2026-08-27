@@ -32,9 +32,9 @@ Atomic counters and explicitly self-synchronized resources are the exceptions
 and are safe for post-tick telemetry.
 
 Systems may be added only during construction. `ClockScheduler.Start` seals the
-world; registering another system after that point panics. Systems run
-sequentially in ascending priority, with registration order breaking equal
-priorities.
+world; registering another system after that point panics. Constructors run in
+declared dependency order. Tick execution remains sequential by ascending
+priority, with manifest registration order breaking equal priorities.
 
 ## 2. Entities and typed stores
 
@@ -298,8 +298,8 @@ the fields it owns into a component, resource, or new value.
 2. Add event types and typed payloads for cross-system requests or domain facts.
 3. Implement behavior as a system with a stable `Name`, priority, `Update`, and
    explicit `EventTypes` subscription.
-4. Register the system in the manifest; keep construction keys and `Name()`
-   equal so configuration and `:system` commands are unsurprising.
+4. Register its domain plus required and optional dependencies in the manifest;
+   keep the key and `Name()` equal so configuration diagnostics stay exact.
 5. Do not retain live store pointers/slices across structural mutation or event
    boundaries.
 6. Make protection, composite routing, and pooled-payload ownership explicit.

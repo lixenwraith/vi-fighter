@@ -74,7 +74,7 @@ file = "boss.toml" # no initial: dynamic region
 
 | Field | Meaning |
 |---|---|
-| `systems.disabled_systems` | Systems disabled after FSM initialization. Names are validated against runtime `System.Name()` values. |
+| `systems.disabled_systems` | Systems disabled after FSM initialization. Names and required dependency states are validated before initialization. |
 | `regions.<name>.initial` | Initial state for a region started during machine initialization. Omit for a region spawned later. |
 | `file` | File supplying additional `[states.*]` tables. |
 | `background` | Excludes the region from normal telemetry/overlay presentation; it still updates and handles events. |
@@ -277,11 +277,11 @@ When a region is spawned or resumed,
 events. Global disabled systems are applied during initialization/reset. This
 allows a scenario to keep mechanics constructed but dormant until needed.
 
-System lists use runtime names. Most equal their manifest key, but the current
-exceptions are `transient_effects` (manifest `transient`) and `timekeeper`
-(manifest `timer`). A system also has to subscribe to and honor
+System lists use the manifest key, which generation verifies against the
+runtime `System.Name()`. A system also has to subscribe to and honor
 `EventMetaSystemCommandRequest`; construction alone does not guarantee runtime
-toggle support.
+toggle support. Disabling a required dependency is rejected during load.
+Disabling an optional dependency is legal and produces one load diagnostic.
 
 ### Operator region primitives
 
@@ -364,7 +364,8 @@ The loader validates at least:
 - legal internal transitions;
 - external-file cycles, illegal top-level content, and duplicate states;
 - state hierarchy/path validity;
-- referenced runtime system names during app-level validation.
+- referenced runtime system names and required dependency states during
+  app-level validation.
 
 State compilation accumulates multiple per-state errors where practical, so
 `-check` is more useful than fail-on-first-error parsing. It does not execute a

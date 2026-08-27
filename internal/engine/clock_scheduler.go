@@ -297,22 +297,32 @@ func (cs *ClockScheduler) RegisterEventHandler(handler event.Handler) {
 	cs.eventRouter.Register(handler)
 }
 
-// LoadFSMFromFS initializes HFSM from a filesystem (embed.FS or os.DirFS)
-func (cs *ClockScheduler) LoadFSMFromFS(fsys fs.FS, entry string, registerComponents func(*fsm.Machine[*World])) error {
+// LoadFSMFromFS initializes HFSM from a filesystem after application validation.
+func (cs *ClockScheduler) LoadFSMFromFS(fsys fs.FS, entry string, registerComponents func(*fsm.Machine[*World]), validate func(*fsm.Machine[*World]) error) error {
 	registerComponents(cs.fsm)
 	if err := fsm.LoadConfigFromFS(cs.fsm, fsys, entry); err != nil {
 		return fmt.Errorf("failed to load FSM: %w", err)
+	}
+	if validate != nil {
+		if err := validate(cs.fsm); err != nil {
+			return fmt.Errorf("failed to validate FSM: %w", err)
+		}
 	}
 	return cs.initLoadedFSM()
 }
 
 // LoadFSMFromPath initializes HFSM from an external entry config
 // Region file includes resolve relative to the file's directory
-func (cs *ClockScheduler) LoadFSMFromPath(configPath string, registerComponents func(*fsm.Machine[*World])) error {
+func (cs *ClockScheduler) LoadFSMFromPath(configPath string, registerComponents func(*fsm.Machine[*World]), validate func(*fsm.Machine[*World]) error) error {
 	registerComponents(cs.fsm)
 
 	if err := fsm.LoadConfigFromPath(cs.fsm, configPath); err != nil {
 		return fmt.Errorf("failed to load FSM: %w", err)
+	}
+	if validate != nil {
+		if err := validate(cs.fsm); err != nil {
+			return fmt.Errorf("failed to validate FSM: %w", err)
+		}
 	}
 	return cs.initLoadedFSM()
 }

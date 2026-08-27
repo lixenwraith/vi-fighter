@@ -56,18 +56,34 @@ func checkFSM(cfg Config, w io.Writer) error {
 	return checkSystems(m, w)
 }
 
-// checkSystems validates every system name the config references
+// checkSystems validates system references and dependency states.
 func checkSystems(m *fsm.Machine[*engine.World], w io.Writer) error {
-	valid := make(map[string]bool)
-	for _, n := range manifest.ActiveSystems() {
-		valid[n] = true
+	warnings, err := validateSystems(m)
+	if err != nil {
+		return err
 	}
+	for _, warning := range warnings {
+		fmt.Fprintln(w, "warning:", warning)
+	}
+	fmt.Fprintln(w, "systems ok")
+	return nil
+}
+
+// validateSystems checks names and required dependencies for every config scope.
+func validateSystems(m *fsm.Machine[*engine.World]) ([]string, error) {
+	profiles := make(map[string]systemDefView, len(manifest.Systems))
+	names := make([]string, 0, len(manifest.Systems))
+	for _, def := range manifest.Systems {
+		profiles[def.Name] = systemDefView{Required: def.Required, Optional: def.Optional}
+		names = append(names, def.Name)
+	}
+	sort.Strings(names)
 
 	var unknown []string
 	check := func(where string, names []string) {
-		for _, n := range names {
-			if !valid[n] {
-				unknown = append(unknown, where+": "+n)
+		for _, name := range names {
+			if _, exists := profiles[name]; !exists {
+				unknown = append(unknown, where+": "+name)
 			}
 		}
 	}
@@ -83,10 +99,80 @@ func checkSystems(m *fsm.Machine[*engine.World], w io.Writer) error {
 		check("region "+r, cfg.DisabledSystems)
 	}
 	if len(unknown) > 0 {
-		return fmt.Errorf("unknown system names:\n  %s", strings.Join(unknown, "\n  "))
+		return nil, fmt.Errorf("unknown system names:\n  %s", strings.Join(unknown, "\n  "))
 	}
-	fmt.Fprintln(w, "systems ok")
-	return nil
+
+	rootDisabled := make(map[string]bool)
+	if cfg := m.GetSystemsConfig(); cfg != nil {
+		for _, name := range cfg.DisabledSystems {
+			rootDisabled[name] = true
+		}
+	}
+
+	warned := make(map[string]bool)
+	warnings, issues := checkSystemState("[systems]", names, profiles, rootDisabled, warned)
+	if len(issues) > 0 {
+		return warnings, systemConfigError(issues)
+	}
+
+	for _, region := range m.DeclaredRegions() {
+		disabled := make(map[string]bool, len(rootDisabled))
+		for _, name := range names {
+			if rootDisabled[name] {
+				disabled[name] = true
+			}
+		}
+		cfg := m.GetRegionConfig(region)
+		if cfg != nil {
+			for _, name := range cfg.DisabledSystems {
+				disabled[name] = true
+			}
+			for _, name := range cfg.EnabledSystems {
+				delete(disabled, name)
+			}
+		}
+
+		stateWarnings, stateIssues := checkSystemState("region "+region, names, profiles, disabled, warned)
+		warnings = append(warnings, stateWarnings...)
+		issues = append(issues, stateIssues...)
+	}
+	if len(issues) > 0 {
+		return warnings, systemConfigError(issues)
+	}
+	return warnings, nil
+}
+
+type systemDefView struct {
+	Required []string
+	Optional []string
+}
+
+// checkSystemState reports enabled dependents whose dependencies are disabled.
+func checkSystemState(scope string, names []string, profiles map[string]systemDefView, disabled map[string]bool, warned map[string]bool) ([]string, []string) {
+	var warnings, issues []string
+	for _, name := range names {
+		if disabled[name] {
+			continue
+		}
+		profile := profiles[name]
+		for _, dependency := range profile.Required {
+			if disabled[dependency] {
+				issues = append(issues, fmt.Sprintf("%s: system %q requires disabled system %q", scope, name, dependency))
+			}
+		}
+		for _, dependency := range profile.Optional {
+			key := name + "\x00" + dependency
+			if disabled[dependency] && !warned[key] {
+				warnings = append(warnings, fmt.Sprintf("%s: system %q is enabled without optional dependency %q", scope, name, dependency))
+				warned[key] = true
+			}
+		}
+	}
+	return warnings, issues
+}
+
+func systemConfigError(issues []string) error {
+	return fmt.Errorf("invalid system configuration:\n  %s", strings.Join(issues, "\n  "))
 }
 
 // checkContent loads the corpus and reports accepted and rejected files

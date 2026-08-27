@@ -10,6 +10,7 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/core"
 	"github.com/lixenwraith/vi-fighter/internal/engine"
 	"github.com/lixenwraith/vi-fighter/internal/event"
+	"github.com/lixenwraith/vi-fighter/internal/fsm"
 	"github.com/lixenwraith/vi-fighter/internal/help"
 	"github.com/lixenwraith/vi-fighter/internal/input"
 	"github.com/lixenwraith/vi-fighter/internal/manifest"
@@ -382,13 +383,20 @@ func (a *App) loadFSM() error {
 	if err != nil {
 		return fmt.Errorf("game config: %w", err)
 	}
+	validate := func(machine *fsm.Machine[*engine.World]) error {
+		warnings, err := validateSystems(machine)
+		for _, warning := range warnings {
+			vlog.Warn("fsm", "msg", "optional system dependency disabled", "detail", warning)
+		}
+		return err
+	}
 	if path == "" {
-		if err := a.scheduler.LoadFSMFromFS(asset.DefaultFSMConfig, asset.DefaultFSMEntry, manifest.RegisterFSMComponents); err != nil {
+		if err := a.scheduler.LoadFSMFromFS(asset.DefaultFSMConfig, asset.DefaultFSMEntry, manifest.RegisterFSMComponents, validate); err != nil {
 			return fmt.Errorf("load embedded FSM: %w", err)
 		}
 		return nil
 	}
-	if err := a.scheduler.LoadFSMFromPath(path, manifest.RegisterFSMComponents); err != nil {
+	if err := a.scheduler.LoadFSMFromPath(path, manifest.RegisterFSMComponents, validate); err != nil {
 		return fmt.Errorf("load FSM %s: %w", path, err)
 	}
 	return nil

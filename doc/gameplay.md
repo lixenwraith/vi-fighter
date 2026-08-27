@@ -321,11 +321,11 @@ and audio systems disabled.
 
 ## 11. System inventory
 
-The manifest registers these tick systems by domain:
+The manifest registers these tick systems by functional area:
 
 | Domain | Systems |
 |---|---|
-| Frame/player | `cursor`, `ping`, `transient_effects`, `camera`, `energy`, `shield`, `heat`, `boost`, `weapon` |
+| Frame/player | `cursor`, `ping`, `transient`, `camera`, `energy`, `shield`, `heat`, `boost`, `weapon` |
 | Typing/world | `typing`, `composite`, `wall`, `tower`, `gateway`, `loot`, `glyph`, `nugget`, `decay`, `blossom`, `gold` |
 | Spawning/effects | `materialize`, `cleaner`, `fuse`, `spirit`, `lightning`, `missile` |
 | Motion/combat | `navigation`, `soft_collision`, `combat` |
@@ -334,10 +334,10 @@ The manifest registers these tick systems by domain:
 | Lifecycle/learning | `environment`, `death`, `timekeeper`, `adaptation`, `genetic` |
 | Sound | `audio`, `music` |
 
-The table uses runtime `Name()` values. Two currently differ from their
-manifest keys: `transient` becomes `transient_effects`, and `timer` becomes
-`timekeeper`. Configuration validation and the `:system` command use runtime
-names. `MetaSystem` is event-only and added directly by the app.
+The table uses manifest keys, which generation verifies against runtime
+`Name()` values. Domain and dependency profiles live in the same manifest;
+the [multi-instance domain model](domain-design.md) defines their semantics.
+`MetaSystem` is context-scoped and added directly by the app.
 
 ## 12. Balance and ownership map
 

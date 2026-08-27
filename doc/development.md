@@ -62,7 +62,8 @@ input enum declarations. `go generate ./internal/manifest/...` runs
 | Generated file | Derived from | Contains |
 |---|---|---|
 | `internal/engine/component_store_gen.go` | manifest components | typed component fields, mask bits, initialization, per-entity/batch removal/wipe |
-| `internal/manifest/build_gen.go` | systems/renderers | constructors and active-name lists |
+| `internal/manifest/build_gen.go` | systems/renderers | system factories, constructors and active-name lists |
+| `internal/system/profile_gen.go` | manifest systems | domain and dependency methods |
 | `internal/event/registry_gen.go` | `internal/event/type.go` and payload comments/types | event name/type/payload registry |
 | `internal/input/strings_gen.go` | selected input enum const blocks | enum string/reverse lookup tables |
 

@@ -32,6 +32,9 @@ cannot escape it (`..` is rejected). Flat layout:
 all state-level errors are reported in one pass. `vi-fighter -schema` prints
 the machine schema (events, guards, actions) as JSON.
 
+System names must match the manifest. Disabling a required system dependency
+is rejected; disabling an optional dependency is accepted with one diagnostic.
+
 ---
 
 ## Root Config (`game.toml`)

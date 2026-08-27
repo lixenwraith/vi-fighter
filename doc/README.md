@@ -16,6 +16,7 @@ reader can start with the application shape and then descend into a subsystem.
 | Document | Level | Primary questions answered |
 |---|---|---|
 | [Architecture overview](architecture.md) | High | What are the major parts, boundaries, and design constraints? |
+| [Multi-instance domain model](domain-design.md) | High/detail | Which state is shared or player-owned, and what preserves cross-instance determinism? |
 | [Package map](package-map.md) | Medium | Which Go packages own each responsibility and how may they depend on one another? |
 | [Runtime and concurrency](runtime.md) | Medium/detail | How does the process start, tick, render, pause, reset, and shut down safely? |
 | [ECS and events](ecs-and-events.md) | Medium/detail | How are entities stored, systems ordered, spatial queries performed, and events settled? |
@@ -51,7 +52,7 @@ changing a subsystem, update the source that actually owns its shape.
 
 | Concern | Authoritative source | Generated or runtime consumer |
 |---|---|---|
-| Components, systems, renderers | `internal/manifest/definition.go` | `internal/manifest/build_gen.go`, `internal/engine/component_store_gen.go` |
+| Components, system profiles, renderers | `internal/manifest/definition.go` | `internal/manifest/build_gen.go`, `internal/system/profile_gen.go`, `internal/engine/component_store_gen.go` |
 | Event names and payload association | `internal/event/type.go` comments and constants | `internal/event/registry_gen.go` |
 | Runtime shape and deterministic harness | `internal/app/config.go`, `headless.go` | `App`, `ClockScheduler`, services |
 | Replay journal format and producer origins | `internal/event/journal.go`, `origin.go` | `internal/journal`, `internal/app/replay.go` |

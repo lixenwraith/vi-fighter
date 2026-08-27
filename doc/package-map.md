@@ -31,9 +31,10 @@ flowchart TD
 ```
 
 The system package is intentionally broad: each file is a gameplay system, and
-the generated manifest supplies construction order. Shared mechanics should
-move downward into focused packages rather than creating system-to-system
-object references; systems communicate through ECS data and events.
+the generated manifest supplies domain profiles plus dependency-ordered
+construction. Shared mechanics should move downward into focused packages
+rather than creating system-to-system object references; systems communicate
+through ECS data and events.
 
 ## 3. Presentation and interaction topology
 
@@ -119,13 +120,13 @@ package, and the numeric stack have the clearest game-independent boundaries.
 registries:
 
 - component field/type pairs;
-- system registry keys and constructors;
+- system registry keys, constructors, domains and dependencies;
 - renderer registry keys, constructors, and layer priorities.
 
 `go generate ./internal/manifest/...` invokes `internal/gen-manifest` and
-updates builders, typed component stores/removal masks, the event reflection
-registry, and input enum strings. Stable tie-breaking comes from manifest order
-when two systems or renderers share a priority.
+updates builders, system profiles, typed component stores/removal masks, the
+event reflection registry, and input enum strings. Stable tick tie-breaking
+comes from manifest order when two systems share a priority.
 
 Important exceptions:
 
@@ -133,8 +134,8 @@ Important exceptions:
   is intentionally absent from the per-tick system manifest.
 - `NetworkSystem` exists but is absent from the manifest and is not active in
   the normal application.
-- runtime system control uses each system's `Name()` value, not necessarily the
-  manifest construction key. New systems should keep those names identical.
+- runtime system control uses each system's `Name()` value, which generation
+  verifies against the manifest construction key.
 
 ## 7. Dependency direction rules
 
