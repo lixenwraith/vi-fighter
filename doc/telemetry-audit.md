@@ -1,6 +1,6 @@
 # Telemetry audit
 
-This audit covers every system constructed by `manifest.BuildSystems`, the inactive `NetworkSystem`, `MetaSystem`, and telemetry owned by `internal/engine` and `internal/event`. The table describes the final wiring; the defect table preserves the Phase 1 findings from the pre-fix tree.
+This audit covers every system constructed by `manifest.BuildSystems`, `MetaSystem`, and telemetry owned by `internal/engine` and `internal/event`. The table describes the final wiring; the defect table preserves the Phase 1 findings from the pre-fix tree.
 
 Every metric is consumed generically by the status snapshot, debug overlay, pinning UI, and `vif-log` registry traversal. “Generic only” means no code or configuration reads the key by name outside its producer. Player patterns expand across roster slots 0–15 and retain the legacy slot-zero mirror; inactive slots keep their frozen schema but are omitted from live views and output until active. Stable keys project into semantic groups of at most 15 fields for overlay and log presentation.
 
@@ -38,12 +38,12 @@ Every metric is consumed generically by the status snapshot, debug overlay, pinn
 | Soft collision | `soft_collision.{collisions,immune_rejects,buf_{drains,swarms,quasars,storms,pylons}_hwm}` | `NewSoftCollisionSystem` | Resolved collision pass and buffer observation | `Init` | Generic only |
 | Combat | `combat.{active,count,hits_direct,hits_area,knockbacks,stuns,damage_dealt,immune_rejects,unprofiled,*_rejects,effect_*,chain_*,damage_{attacker,defender}_*,absorbed_{attacker,defender}_*}` | `NewCombatSystem` | Resolved direct/area attacks | `Init` | Generic only |
 | Drain | `drain.{count,pending,collisions,suicides,spawned,fusions,despawned,spawn_failures,killed_by_*,wall_collisions,boundary_reflections,grid_steps,protected_rejects,buf_*_hwm}` | `NewDrainSystem` | Spawn/lifecycle/collision/movement paths | `Init` | Generic only |
-| Quasar | `quasar.{active,count,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects}` | `NewQuasarSystem` | Spawn/lifecycle/bounce paths | `Init` | Generic only |
-| Swarm | `swarm.{active,count,player_kills,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects}` | `NewSwarmSystem` | Spawn/lifecycle/bounce paths | `Init` | Generic only |
-| Storm | `storm.{active,circle_count,*_active_frames,nudge_count,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects,buf_*_hwm}` | `NewStormSystem` | Spawn/lifecycle/3-D physics/update paths | `Init` | Generic only |
+| Quasar | `quasar.{active,count,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects,protected_player_rejects}` | `NewQuasarSystem` | Spawn/lifecycle/bounce paths | `Init` | Generic only |
+| Swarm | `swarm.{active,count,player_kills,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects,protected_player_rejects}` | `NewSwarmSystem` | Spawn/lifecycle/bounce paths | `Init` | Generic only |
+| Storm | `storm.{active,circle_count,*_active_frames,nudge_count,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects,protected_player_rejects,buf_*_hwm}` | `NewStormSystem` | Spawn/lifecycle/3-D physics/update paths | `Init` | Generic only |
 | Pylon | `pylon.{active,count,spawned,despawned,killed_by_player,killed_by_lifecycle,spawn_failures}` | `NewPylonSystem` | Spawn/cancel/death handlers and update | `Init` | Generic only |
-| Snake | `snake.{active,count,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects}` | `NewSnakeSystem` | Spawn/lifecycle/bounce paths | `Init` | Generic only |
-| Eye | `eye.{count,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects}` | `NewEyeSystem` | Spawn/lifecycle/bounce paths | `Init` | Generic only |
+| Snake | `snake.{active,count,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects,protected_player_rejects}` | `NewSnakeSystem` | Spawn/lifecycle/bounce paths | `Init` | Generic only |
+| Eye | `eye.{count,spawned,despawned,killed_by_*,spawn_failures,wall_collisions,boundary_reflections,physics_steps,protected_rejects,protected_player_rejects}` | `NewEyeSystem` | Spawn/lifecycle/bounce paths | `Init` | Generic only |
 | Bullet | `bullet.{wall_collisions,boundary_hits,grid_steps,disabled_rejects}` | `NewBulletSystem` | Spawn rejection and swept update | `Init` | Generic only |
 | Dust | `dust.{created,active,destroyed,wall_collisions,boundary_reflections,grid_steps,buf_*_hwm}` | `NewDustSystem` | Resolved spawn/destruction/collision paths | `Init` | Generic only |
 | Flash | None | — | — | — | — |
@@ -59,8 +59,8 @@ Every metric is consumed generically by the status snapshot, debug overlay, pinn
 | Genetic | `eye.ga.{generation,best,avg,pending,outcomes,tracked,typefit}`, `eye.buf_ga_*_hwm` | `NewGeneticSystem` | GA processing; formatted type fitness on snapshot cadence | `Init` | Generic only |
 | Audio | `audio.{backend,silent,played,dropped,mask,effect_muted,music_muted,rej_*}` | `NewAudioSystem` | Session deltas from backend/update | `Init` with backend baselines | `audio.mask` is read by the status bar; remainder generic |
 | Music | None | — | — | — | — |
-| Meta | `context.{map_w,map_h,camera_x,camera_y}`, `player.<slot>.{x,y}`, `kills.{<species>,total,uncredited}` | `NewMetaSystem` | Debug/map publication and resolved species-kill handler | `Init` | `kills.{drain,quasar,swarm,storm}` are FSM guards; remainder generic |
-| Network (inactive) | None | — | — | — | — |
+| Meta | `context.{map_w,map_h,camera_x,camera_y}`, `player.<slot>.{x,y}`, `kills.{<species>,total,uncredited}`, `session.all_defeated` | `NewMetaSystem` | Debug/map publication, lifecycle fold and resolved species-kill handler | `Init` | Kill keys and `session.all_defeated` are FSM guards; remainder generic |
+| Network | `network.{crossings_sent,crossings_received,state_applied,frames_dropped,barrier_deferred,barrier_applied_local,barrier_applied_peer,barrier_late,barrier_ran_without_peer,barrier_peer_lag_ticks,barrier_peer_artifacts,barrier_peer_applied}` | `NewNetworkSystem` | Transport polling, fixed-delay admission and cursor sync | `Init` | Generic only |
 
 ## Engine and event audit
 
@@ -91,7 +91,7 @@ Every metric is consumed generically by the status snapshot, debug overlay, pinn
 - The position store binds its metrics immediately after `NewGameContextWithClock` creates the registry; `World` necessarily constructs the store before that registry exists. It is frozen before the first tick and never registers during reset.
 - Legacy slot-zero mirrors such as `energy.current`, `heat.current`, and `player.x` remain intact for existing status-bar/config consumers.
 - Registry-owned `content.*`, `rec.*`, and `stat.*` metrics and persistent operator/context settings are excluded from session-zero assertions. Reset tests seed and verify every session-owned int, bool, and string; live gauges are allowed to rebuild to their deterministic reset values.
-- Systems with no existing counters and no reusable allocation-shaped buffers remain metric-free. `NetworkSystem` is not constructed by the active manifest.
+- Systems with no existing counters and no reusable allocation-shaped buffers remain metric-free.
 - `hitComposite.members` in the explosion path remains a fresh queued-payload slice, not a reusable system buffer; reusing it would corrupt queued events.
 - Event-type arrays remain internal fixed atomics and are formatted only at `parameter.StatSnapshotTicks`, avoiding per-event formatting/allocation.
 
@@ -256,6 +256,7 @@ All 262 surviving additions are listed below. No key was renamed or repurposed; 
 | `eye.killed_by_lifecycle` (int) | eye deaths with no resolved roster-cursor killer. |
 | `eye.killed_by_player` (int) | eye deaths credited to a resolved roster cursor. |
 | `eye.physics_steps` (int) | Physics integration substeps executed for eye movers. |
+| `eye.protected_player_rejects` (int) | eye interactions rejected on player-domain victims. |
 | `eye.protected_rejects` (int) | eye interactions rejected by the applicable protection mask. |
 | `eye.spawn_failures` (int) | eye spawn requests that could not produce an entity. |
 | `eye.spawned` (int) | Successfully created eye lifecycle instances. |
@@ -284,6 +285,18 @@ All 262 surviving additions are listed below. No key was renamed or repurposed; 
 | `nugget.cursor_rejects` (int) | Requests rejected because nugget could not resolve a roster cursor. |
 | `nugget.disabled_rejects` (int) | Action requests dropped while the nugget system was disabled. |
 | `nugget.spawn_failures` (int) | nugget spawn requests that could not produce an entity. |
+| `network.barrier_applied_local` (int) | Deferred local artifacts admitted at their playout boundary. |
+| `network.barrier_applied_peer` (int) | Peer artifacts admitted at their playout boundary. |
+| `network.barrier_deferred` (int) | Local crossing artifacts accepted by the barrier. |
+| `network.barrier_late` (int) | Artifacts admitted after their scheduled apply tick. |
+| `network.barrier_peer_applied` (bool) | Whether the most recent boundary admitted a peer artifact. |
+| `network.barrier_peer_artifacts` (int) | Peer artifacts admitted at the most recent boundary. |
+| `network.barrier_peer_lag_ticks` (int) | Closed-epoch lag beyond the negotiated playout lead. |
+| `network.barrier_ran_without_peer` (int) | Tick boundaries reached before every required peer epoch marker. |
+| `network.crossings_received` (int) | Peer crossing artifacts decoded and admitted. |
+| `network.crossings_sent` (int) | Local crossing artifacts sent in closed epochs. |
+| `network.frames_dropped` (int) | Transport frames rejected by encoding, framing, ordering or identity checks. |
+| `network.state_applied` (int) | Owner-authored cursor snapshots applied to remote cursors. |
 | `ping.cursor_rejects` (int) | Requests rejected because ping could not resolve a roster cursor. |
 | `ping.disabled_rejects` (int) | Action requests dropped while the ping system was disabled. |
 | `player.cursor_rejects` (int) | Requests rejected because player could not resolve a roster cursor. |
@@ -298,17 +311,20 @@ All 262 surviving additions are listed below. No key was renamed or repurposed; 
 | `quasar.killed_by_lifecycle` (int) | quasar deaths with no resolved roster-cursor killer. |
 | `quasar.killed_by_player` (int) | quasar deaths credited to a resolved roster cursor. |
 | `quasar.physics_steps` (int) | Physics integration substeps executed for quasar movers. |
+| `quasar.protected_player_rejects` (int) | quasar interactions rejected on player-domain victims. |
 | `quasar.protected_rejects` (int) | quasar interactions rejected by the applicable protection mask. |
 | `quasar.spawn_failures` (int) | quasar spawn requests that could not produce an entity. |
 | `quasar.spawned` (int) | Successfully created quasar lifecycle instances. |
 | `quasar.wall_collisions` (int) | Resolved quasar contacts with blocking wall cells. |
 | `shield.cursor_rejects` (int) | Requests rejected because shield could not resolve a roster cursor. |
 | `shield.disabled_rejects` (int) | Action requests dropped while the shield system was disabled. |
+| `session.all_defeated` (bool) | Every currently rostered cursor has crossed its terminal heat/energy state. |
 | `snake.boundary_reflections` (int) | Resolved snake reflections at simulation bounds. |
 | `snake.despawned` (int) | snake instances removed by cancellation or integrity cleanup. |
 | `snake.killed_by_lifecycle` (int) | snake deaths with no resolved roster-cursor killer. |
 | `snake.killed_by_player` (int) | snake deaths credited to a resolved roster cursor. |
 | `snake.physics_steps` (int) | Physics integration substeps executed for snake movers. |
+| `snake.protected_player_rejects` (int) | snake interactions rejected on player-domain victims. |
 | `snake.protected_rejects` (int) | snake interactions rejected by the applicable protection mask. |
 | `snake.spawn_failures` (int) | snake spawn requests that could not produce an entity. |
 | `snake.spawned` (int) | Successfully created snake lifecycle instances. |
@@ -337,6 +353,7 @@ All 262 surviving additions are listed below. No key was renamed or repurposed; 
 | `storm.killed_by_lifecycle` (int) | storm deaths with no resolved roster-cursor killer. |
 | `storm.killed_by_player` (int) | storm deaths credited to a resolved roster cursor. |
 | `storm.physics_steps` (int) | Physics integration substeps executed for storm movers. |
+| `storm.protected_player_rejects` (int) | storm interactions rejected on player-domain victims. |
 | `storm.protected_rejects` (int) | storm interactions rejected by the applicable protection mask. |
 | `storm.spawn_failures` (int) | storm spawn requests that could not produce an entity. |
 | `storm.spawned` (int) | Successfully created storm lifecycle instances. |
@@ -346,6 +363,7 @@ All 262 surviving additions are listed below. No key was renamed or repurposed; 
 | `swarm.killed_by_lifecycle` (int) | swarm deaths with no resolved roster-cursor killer. |
 | `swarm.killed_by_player` (int) | swarm deaths credited to a resolved roster cursor. |
 | `swarm.physics_steps` (int) | Physics integration substeps executed for swarm movers. |
+| `swarm.protected_player_rejects` (int) | swarm interactions rejected on player-domain victims. |
 | `swarm.protected_rejects` (int) | swarm interactions rejected by the applicable protection mask. |
 | `swarm.spawn_failures` (int) | swarm spawn requests that could not produce an entity. |
 | `swarm.spawned` (int) | Successfully created swarm lifecycle instances. |

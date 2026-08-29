@@ -12,7 +12,7 @@ Companion to `domain-design.md`. Rules referenced as D-n.
 | 4.4 Combat payload reduced to geometry | done |
 | 4.5 Player-domain projectiles; cleaner and materialize stamped | done |
 | 4.6 Cursor view components (`CursorViewComponent`) | done |
-| 4.7 Nugget cursor leak resolved via `ClosestCursor` | done |
+| 4.7 Nugget cursor leak resolved via `ClosestCursor` | superseded in Phase 8 — personal |
 | 4.8 Fuse player-domain, geometry-only crossing, spirit stamped | done |
 | 4.9 Config split | withdrawn — one struct, no benefit |
 | 4.10 Drain flocking | resolved by declaration |
@@ -76,7 +76,8 @@ into Phase 6.
    contested — deterministic slot order, positions only. One fix:
    `NuggetSystem.emitBeacon` now uses `PushLocal`, so a shared nugget beacon
    draws each instance's own cleaners instead of one shared cleaner carrying
-   pure visuals.
+   pure visuals. Phase 8 supersedes this arrangement by making the nugget itself
+   personal; the beacon remains local.
 5. **`MetaSystem` profile confirmed** `shared`, rationale corrected: its world
    writes are replicated or are the D-14 map-bounds write, and the context
    state it writes is not world state.
@@ -254,38 +255,104 @@ record split, and the exclusion of cursor combat from the shared digest.
 
 ## Phase 8 — Multi-instance verification
 
-Two *live* in-process instances sharing a seed and an event pipe, driven by
-`RunScript`, asserting `SnapshotShared()` equality per tick and reporting the
-first divergent record via `FirstDiff`/`Diff`.
+Two *live* in-process instances sharing a seed and an event pipe, each driven by
+an independent `ScriptDriver`, assert `SnapshotShared()` equality at every paired
+tick boundary and report the first divergent record via `FirstDiff`/`Diff`.
+`TestTwoLiveParticipantsStayInLockstep` holds for 1,200 steps plus the trailing
+barrier drain; both cursors move, both participants send crossings, and both
+produce nonzero APM.
 
-Blocker to resolve first: **the lockstep barrier**. A crossing pushed during a
-settle applies locally in that settle but reaches the peer at the next tick's
-opening. Exact per-tick agreement needs produce, exchange, then apply — each
-instance deferring its own crossings to the same relative point its peer applies
-them at. Phase 7's one-directional test holds to 200 steps without it; two live
-participants will not.
+First blocker, **resolved: the fixed-delay crossing barrier.** A crossing pushed
+during a settle used to apply locally there and remotely at the next tick opening,
+a one-tick/50ms divergence window. `WireSink.Cross` now withholds the local
+artifact, `Flush` exchanges a closed production epoch asynchronously, and
+`Receive` applies both local and peer artifacts at the same future between-tick
+boundary. The default three-tick/150ms playout lead requires no synchronous
+round trip. An apply-generated crossing belongs to the next production epoch and
+receives a full delay of its own. With no peer the sink declines ownership and the
+old queue/settle path is unchanged. The Phase 7 observer test now holds for 1,200
+steps while preserving replay settle groups.
 
-Second blocker: **`NuggetSystem.collectionCursor`**. A shared outcome resolved by
-owner-authored ember and shield state, which arrives on a periodic sync. No
-cadence closes it — see the domain document's §7. The choice is a shared
-collection rule or a personal one, and it is a gameplay decision.
+Second blocker, **resolved: nugget is personal and uncontested.** The component,
+system, RNG and event family are player-domain/local. Collection reads only the
+local binding, remote cursors cannot claim it, and a jump transports only the
+resulting shared cursor move. The two-live parity test keeps nugget enabled.
 
-Third, from `headless.go`: four process-wide values no snapshot reaches but that
-prevent concurrent Apps — the status recorder trigger hook, the navigation debug
-pointers in `internal/system`, help's key table, and vlog's correlation stamp.
-Phase 7's tests run two Apps in one process and do not touch them; a live pair
-that resizes, records or navigates will.
+The two-live harness owns one tick per participant per step. It disables random
+script ticks and the overlay round trip so neither App can outrun the three-tick
+playout lead. `Resizes`, `MapSetups`, FSM `Regions`, resets and ex commands are
+also held fixed: each is an operator injection applied only to the App receiving
+it, and several intentionally rewrite shared scheduler or simulation state. They
+are not participant gameplay and are not transported under D-10.
+
+Third, from `headless.go`, **resolved:** the status recorder trigger hook,
+navigation debug state, help key table and vlog correlation stamp now belong to
+their App-owned registry or `GameContext`. `TestConcurrentAppsKeepProcessStateScoped`
+drives two Apps through resize and debug mutations without cross-talk.
+
+Fourth, **resolved at the transport seam: TCP.** `network.SocketPort` implements
+the same poll contract as `Loopback` over the existing 12-byte length-bearing
+stream header. `io.ReadFull` admits no partial frame and the encoder completes
+short writes. The join handshake carries `JoinAnchor`, coordinator-assigned
+participant IDs and roster slots, and the negotiated barrier delay. The joiner
+uses `ConfigForJoin` before construction, so it adopts the anchor seed rather
+than drawing one; `App.JoinSession` then invokes the existing identity check and
+D-14 latch. A tick-zero start/ready gate lets both Apps finish roster construction
+before either clock runs. Network goroutines still touch only `SocketPort`'s
+inbound buffer. Framed heartbeats and connection deadlines turn a silent stream
+into the same drained disconnect outcome as an orderly close.
+
+`TestTwoLiveParticipantsStayInLockstepOverTCP` repeats the 1,200-step two-driver
+criterion through `127.0.0.1`, asserting the same shared snapshot after every
+paired boundary. It then disconnects the guest: the host removes only the remote
+cursor, retains its local cursor and keeps the listener running. Handshake
+rejection returns the original join mismatch, and the host remains available.
+The status registry and bar expose connection state, peer count and map latch as
+`network.{state,peers,map_latched}` in the `network.session` card and
+`NET:<state>/<latch>`.
+
+Encoding remains the journal's TOML payload inside a JSON epoch. Complete frames
+measure 44 bytes for an empty epoch, 567 bytes for four cursor moves, 1,771 bytes
+for six resolved three-member shield hits, and 703 bytes for one D-13 sync. At
+20 ticks/s and the six-tick sync cadence this is approximately 3.2 KB/s idle,
+13.7 KB/s at four crossings/tick, and 37.8 KB/s at the busy shield rate, per
+direction and owned cursor. `TestWireEncodingBudget` pins those representative
+budgets. The bandwidth does not justify a second dense codec and its parallel
+schema/registry path.
+
+**Not in this checkpoint:** the `cmd/vif` startup flags and manual two-terminal
+surface. The transport proof is two participants, startup-only, trusted and
+plaintext; there is no mid-run world snapshot, reconnect, authentication, lag
+compensation or TLS operator configuration. `SessionOffer.Participants` and the
+canonical source ordering already carry vectors, so four participants extend the
+coordinator and snapshot lifecycle rather than replace the transport shape.
+
+The extended observer soak also closed four latent shared-outcome leaks:
+
+- personal drain deaths now cross `EventDrainDefeated` before advancing
+  `kills.drain`;
+- `EventCombatHealRequest`, already pushed as a crossing, is correctly classified
+  `Bus` rather than `Shared`;
+- shared species resolve a shield impact only for a locally owned cursor and cross
+  the exact shared area-hit target/member set;
+- the global-reset guard folds crossed per-owner defeat state and fires only when
+  every rostered cursor is defeated, rather than reading slot-zero heat/energy.
+
+`TestSharedCursorOverlapOutcomesStayOwnerResolved`,
+`TestSharedSpeciesCrossesOnlyOwnedShieldImpact`,
+`TestCursorDefeatTransitionCrossesCombinedOwnerState` and
+`TestMetaDefeatGateRequiresEveryRosteredCursor` pin those shapes. The protection
+rejection counters of shared species are split by victim domain so the shared
+snapshot compares their shared half.
 
 ## Carried-forward gaps
 
 Small and self-contained; none blocks Phase 8. Closed in Phase 7: the `ctx|player`
 record split, the `spatial.indexed_shared` allow-list, `World.UpdateBoundsRadius`,
 and `internal/journal` round-trip coverage, which `read_test.go` now carries.
+Closed in Phase 8: the disruptor pulse now crosses one combat-only explosion
+artifact and resolves player targets before the crossing.
 
-- **The weapon pulse** pushes an area attack at shared targets with no geometry
-  crossing behind it. `EventCombatAttackAreaRequest` is `Shared`, so the pulse's
-  hits are re-derived by a peer that never saw the pulse — the only D-3 row still
-  open.
 - **Operator grant commands** in `internal/mode/commands.go` push the
   owner-authored family with the ambient shared tag under `OriginCommand`.
   Harmless while those types are `Local` class, which the wire never reads.
