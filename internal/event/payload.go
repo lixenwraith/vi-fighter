@@ -159,6 +159,12 @@ type GameResetPayload struct {
 	Purge bool `toml:"purge"`
 }
 
+// CursorDefeatStatePayload carries one owner's combined heat/energy state.
+type CursorDefeatStatePayload struct {
+	Entity   core.Entity `toml:"entity"`
+	Defeated bool        `toml:"defeated"`
+}
+
 // MetaStatusMessagePayload contains message to be displayed in status bar
 type MetaStatusMessagePayload struct {
 	Message          string        `toml:"message"`
@@ -217,12 +223,12 @@ type FSMRegionPayload struct {
 
 // --- Nugget ---
 
-// NuggetCollectedPayload signals successful nugget collection
+// NuggetCollectedPayload signals successful personal nugget collection.
 type NuggetCollectedPayload struct {
 	Entity core.Entity `toml:"entity"`
 }
 
-// NuggetDestroyedPayload signals external nugget destruction
+// NuggetDestroyedPayload signals external destruction of a personal nugget.
 type NuggetDestroyedPayload struct {
 	Entity core.Entity `toml:"entity"`
 }
@@ -490,6 +496,7 @@ const (
 	ExplosionTypeDust    ExplosionType = iota // Converts glyphs to dust, cyan palette
 	ExplosionTypeMissile                      // Visual only, warm palette
 	ExplosionTypeEye                          // Self-destruct explosion with character noise
+	ExplosionTypePulse                        // Combat geometry only; PulseComponent owns the visual
 )
 
 // ExplosionRequestPayload describes one explosion center: geometry, combat family and
@@ -597,9 +604,8 @@ type CompositeDestroyRequestPayload struct {
 //
 // Shield and Combat are split to their cursor fields: both stores also carry
 // quasar, loot and species state, which is re-derived and must not travel.
-// ShieldActive, ShieldInvRxSq/RySq and EmberActive are the load-bearing members —
-// NuggetSystem resolves a shared collection through them, so an instance missing
-// them disagrees on a shared outcome. The rest is the peer's HUD.
+// ShieldActive, ShieldInvRxSq/RySq and EmberActive reproduce the remote cursor's
+// presentation and owner-local interactions. No shared outcome reads this snapshot.
 // CursorViewComponent.Orbs is absent: it names player-domain entities (D-4).
 // Durations are nanoseconds so the TOML round trip is exact.
 type CursorStatePayload struct {

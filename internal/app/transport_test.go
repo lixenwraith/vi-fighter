@@ -114,8 +114,8 @@ func TestTransportSyncsOwnerAuthoredCursorState(t *testing.T) {
 		ownedShield, _ = b.World().Components.Shield.GetComponent(ownedOnB)
 	})
 
-	// Heat and the shield ellipse are the load-bearing members: NuggetSystem
-	// resolves a shared collection through exactly these.
+	// Heat and the shield ellipse are mirrored for the remote cursor's presentation
+	// and owner-local interactions; they no longer determine a shared outcome.
 	if mirrored.Current != owned.Current || mirrored.Current != 55 || !mirrored.EmberActive {
 		t.Fatalf("remote heat on a = %d, owner holds %d; ember %t",
 			mirrored.Current, owned.Current, mirrored.EmberActive)
@@ -125,8 +125,7 @@ func TestTransportSyncsOwnerAuthoredCursorState(t *testing.T) {
 		t.Fatalf("remote shield on a = %#v, owner holds %#v", mirrorShield, ownedShield)
 	}
 
-	// The load-bearing consequence: NuggetSystem resolves a shared collection
-	// through exactly these fields, so both instances now read the same ones.
+	// The receiving instance applied at least one owner-authored snapshot.
 	var applied int64
 	a.World().RunSafe(func() {
 		applied = a.World().Resources.Status.Ints.Get("network.state_applied").Load()
@@ -148,10 +147,24 @@ func TestTransportCarriesCrossingsWithoutEcho(t *testing.T) {
 	a.Context().PushCrossing(event.EventCursorMoveRequest,
 		&event.CursorMoveRequestPayload{Entity: target, X: 31, Y: 12})
 	a.Settle()
+	assertPosition := func(x *App, want bool) {
+		t.Helper()
+		var pos component.PositionComponent
+		x.World().RunSafe(func() { pos, _ = x.World().Positions.GetPosition(target) })
+		if got := pos.X == 31 && pos.Y == 12; got != want {
+			t.Fatalf("cursor on participant = (%d, %d), target applied = %t, want %t", pos.X, pos.Y, got, want)
+		}
+	}
+	assertPosition(a, false)
+	assertPosition(b, false)
+	for range parameter.NetworkBarrierDelayTicks {
+		a.Tick(1)
+		b.Tick(1)
+		assertPosition(a, false)
+		assertPosition(b, false)
+	}
 	a.Tick(1)
 	b.Tick(1)
-	b.Tick(1)
-	a.Tick(1)
 
 	var sentA, recvB, sentB int64
 	a.World().RunSafe(func() {
@@ -177,36 +190,44 @@ func TestTransportCarriesCrossingsWithoutEcho(t *testing.T) {
 	}
 }
 
-// TestObserverSharedStateTracksTheLiveParticipant is Phase 7's exit criterion,
-// one step short of Phase 8's: two participants share a seed and an event pipe, and
-// the one that simulates no cursor holds the shared state the live one produces —
-// arriving over the wire rather than re-derived. Per-tick parity between two *live*
-// participants needs the produce-exchange-apply barrier Phase 8 builds; here the
-// traffic is one-directional, so ordering the observer's tick after the producer's
-// is enough for the comparison to be exact at every boundary.
+func TestBarrierIsNoOpWithoutPeer(t *testing.T) {
+	a := mustHeadless(t, 0x5EEDBEEF, 120, 40)
+	t.Cleanup(a.Close)
+	tickUntilCursor(t, a)
+
+	var cursor core.Entity
+	a.World().RunSafe(func() { cursor = a.World().Resources.Player.Slot(0) })
+	a.Context().PushCrossing(event.EventCursorMoveRequest,
+		&event.CursorMoveRequestPayload{Entity: cursor, X: 17, Y: 9})
+	a.Settle()
+
+	var pos component.PositionComponent
+	var deferred, lag int64
+	a.World().RunSafe(func() {
+		pos, _ = a.World().Positions.GetPosition(cursor)
+		reg := a.World().Resources.Status
+		deferred = reg.Ints.Get("network.barrier_deferred").Load()
+		lag = reg.Ints.Get("network.barrier_peer_lag_ticks").Load()
+	})
+	if pos.X != 17 || pos.Y != 9 {
+		t.Fatalf("no-peer crossing remained deferred at (%d, %d)", pos.X, pos.Y)
+	}
+	if deferred != 0 || lag != 0 {
+		t.Fatalf("no-peer barrier telemetry = (deferred %d, lag %d), want zero", deferred, lag)
+	}
+}
+
+// TestObserverSharedStateTracksTheLiveParticipant proves the barrier first with
+// one-way traffic: local and peer artifacts apply at the same future tick boundary.
 func TestObserverSharedStateTracksTheLiveParticipant(t *testing.T) {
 	const seed = 0x5EEDBEEF
-	// 200 is the horizon this holds to. Beyond it the residual asymmetry shows: a
-	// crossing pushed during a settle applies locally in that settle but reaches the
-	// peer in the next tick's opening, so a damage-immunity window can close on one
-	// side and not the other. Closing that is the produce-exchange-apply barrier
-	// Phase 8 builds, not a transport bug.
-	steps := 200
+	steps := 1200
 	if testing.Short() {
-		steps = 40
+		steps = 120
 	}
 
 	live, observer := pair(t, seed, steps)
 	observeOnly(t, observer)
-
-	// NuggetSystem.collectionCursor resolves a *shared* outcome — which cursor
-	// claims the nugget — by reading owner-authored ember and shield state, which
-	// arrives on a periodic sync and is therefore up to NetworkSyncTicks stale. The
-	// domain document says a contested mechanic is a function of shared state
-	// alone; this one is not, and no sync cadence closes it. Disabled here so the
-	// rest of the shared surface is asserted rather than masked by it.
-	disableSystem(t, live, "nugget")
-	disableSystem(t, observer, "nugget")
 
 	assertSharedParity(t, live, observer, -1)
 
@@ -230,6 +251,195 @@ func TestObserverSharedStateTracksTheLiveParticipant(t *testing.T) {
 		observer.Tick(1)
 		assertSharedParity(t, live, observer, i)
 	}
+}
+
+// TestTwoLiveParticipantsStayInLockstep is Phase 8's headless exit criterion.
+func TestTwoLiveParticipantsStayInLockstep(t *testing.T) {
+	const seed = 0x5EEDBEEF
+	steps := 1200
+	if testing.Short() {
+		steps = 120
+	}
+
+	a, b := pair(t, seed, steps)
+	localA, _ := mirrorCursors(t, a, b)
+	var localB core.Entity
+	b.World().RunSafe(func() { localB = b.World().Resources.Player.Slot(1) })
+	proveTwoLive(t, a, b, localA, localB, seed, steps, func() {
+		a.Tick(1)
+		b.Tick(1)
+	})
+}
+
+// TestTwoLiveParticipantsStayInLockstepOverTCP proves the same session through
+// stream framing, the anchor handshake and canonical socket participant IDs.
+func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
+	const seed = 0x5EEDBEEF
+	steps := 1200
+	if testing.Short() {
+		steps = 120
+	}
+
+	a := mustHeadless(t, seed, 120, 40)
+	t.Cleanup(a.Close)
+	offer := network.SessionOffer{
+		Anchor: a.JoinAnchor(), Host: 1, Assigned: 2,
+		Participants:      []network.SessionParticipant{{ID: 1, Slot: 0}, {ID: 2, Slot: 1}},
+		BarrierDelayTicks: parameter.NetworkBarrierDelayTicks,
+	}
+	hostCfg := network.DebugConfig(network.RoleHost, "127.0.0.1:0")
+	hostCfg.ParticipantID = offer.Host
+	hostCfg.AcceptSession = network.HostAcceptor(func() (network.SessionOffer, error) { return offer, nil }, time.Second)
+	host := network.NewSocketPort(hostCfg)
+	t.Cleanup(func() { _ = host.Close() })
+	if err := host.Start(); err != nil {
+		t.Fatalf("host transport: %v", err)
+	}
+	a.AttachTransport(host)
+
+	pending, offered, err := network.DialSession(host.Addr().String(), network.DebugConfig(network.RolePeer, ""))
+	if err != nil {
+		t.Fatalf("dial session: %v", err)
+	}
+	t.Cleanup(func() { _ = pending.Close() })
+	joinCfg, err := ConfigForJoin(Config{Mode: ModeHeadless, Width: 120, Height: 40}, offered)
+	if err != nil {
+		t.Fatalf("join config: %v", err)
+	}
+	b, err := NewHeadless(joinCfg)
+	if err != nil {
+		t.Fatalf("join app: %v", err)
+	}
+	t.Cleanup(b.Close)
+	if err := b.JoinSession(offered); err != nil {
+		_ = pending.Complete(err)
+		t.Fatalf("join session: %v", err)
+	}
+	if err := pending.Complete(nil); err != nil {
+		t.Fatalf("join reply: %v", err)
+	}
+	waitSocket(t, host, func() bool { return host.PeerCount() == 1 }, "host peer")
+	if err := a.HostSession(offer); err != nil {
+		t.Fatalf("host roster: %v", err)
+	}
+	if !host.Send(uint32(offered.Assigned), uint8(network.MsgStart), nil) {
+		t.Fatal("host could not send start gate")
+	}
+	if err := pending.WaitStart(); err != nil {
+		t.Fatalf("start gate: %v", err)
+	}
+	if err := pending.Ready(); err != nil {
+		t.Fatalf("ready gate: %v", err)
+	}
+	waitSocket(t, host, func() bool { return host.ReadyCount() == 1 }, "joiner ready")
+
+	guest := network.NewSocketPort(pending.TransportConfig())
+	t.Cleanup(func() { _ = guest.Close() })
+	if err := guest.Start(); err != nil {
+		t.Fatalf("guest transport: %v", err)
+	}
+	b.AttachTransport(guest)
+	waitSocket(t, guest, func() bool { return guest.PeerCount() == 1 }, "guest peer")
+
+	var localA, localB core.Entity
+	a.World().RunSafe(func() { localA = a.World().Resources.Player.Slot(0) })
+	b.World().RunSafe(func() { localB = b.World().Resources.Player.Slot(1) })
+	proveTwoLive(t, a, b, localA, localB, seed, steps, func() {
+		recvA, recvB := host.Received(), guest.Received()
+		a.Tick(1)
+		b.Tick(1)
+		waitSocket(t, host, func() bool { return host.Received() > recvA }, "host epoch")
+		waitSocket(t, guest, func() bool { return guest.Received() > recvB }, "guest epoch")
+	})
+
+	if err := guest.Close(); err != nil {
+		t.Fatalf("guest disconnect: %v", err)
+	}
+	waitSocket(t, host, func() bool { return host.PeerCount() == 0 }, "host disconnect")
+	a.Tick(1)
+	var roster int
+	var state string
+	var peers int64
+	var latched bool
+	a.World().RunSafe(func() {
+		roster = a.World().Resources.Player.Count()
+		reg := a.World().Resources.Status
+		state = reg.Strings.Get("network.state").Load()
+		peers = reg.Ints.Get("network.peers").Load()
+		latched = reg.Bools.Get("network.map_latched").Load()
+	})
+	if roster != 1 || !host.IsRunning() || state != "down" || peers != 0 || latched {
+		t.Fatalf("host after disconnect = roster %d running %t state %q peers %d latch %t",
+			roster, host.IsRunning(), state, peers, latched)
+	}
+}
+
+func proveTwoLive(t *testing.T, a, b *App, localA, localB core.Entity, seed uint64, steps int, tickPair func()) {
+	t.Helper()
+	assertSharedParity(t, a, b, -1)
+
+	// The harness owns the clock and holds non-transported operator mutations fixed.
+	optA := parityScript(seed, steps)
+	optA.Regions, optA.MapSetups = false, false
+	optA.DisableTicks, optA.DisableCommands, optA.DisableOverlays = true, true, true
+	optB := optA
+	optB.Seed ^= 0x9E3779B97F4A7C15
+	da, db := NewScriptDriver(a, optA), NewScriptDriver(b, optB)
+
+	startA, startB := cursorPosition(a, localA), cursorPosition(b, localB)
+	movedA, movedB := false, false
+	for i := range steps {
+		if !da.Step() {
+			t.Fatalf("step %d quit participant a", i)
+		}
+		if !db.Step() {
+			t.Fatalf("step %d quit participant b", i)
+		}
+		tickPair()
+		movedA = movedA || cursorPosition(a, localA) != startA
+		movedB = movedB || cursorPosition(b, localB) != startB
+		assertSharedParity(t, a, b, i)
+	}
+	for i := range parameter.NetworkBarrierDelayTicks + 1 {
+		tickPair()
+		assertSharedParity(t, a, b, steps+i)
+	}
+
+	var sentA, sentB int64
+	var apmA, apmB uint64
+	a.World().RunSafe(func() {
+		sentA = a.World().Resources.Status.Ints.Get("network.crossings_sent").Load()
+		apmA = a.World().Resources.Game.State.GetAPM()
+	})
+	b.World().RunSafe(func() {
+		sentB = b.World().Resources.Status.Ints.Get("network.crossings_sent").Load()
+		apmB = b.World().Resources.Game.State.GetAPM()
+	})
+	if !movedA || !movedB || sentA == 0 || sentB == 0 || apmA == 0 || apmB == 0 {
+		t.Fatalf("live proof = moved(%t,%t) sent(%d,%d) apm(%d,%d), want both active",
+			movedA, movedB, sentA, sentB, apmA, apmB)
+	}
+}
+
+func waitSocket(t *testing.T, port *network.SocketPort, ready func() bool, what string) {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for !ready() {
+		select {
+		case err := <-port.Errors():
+			t.Fatalf("%s: %v", what, err)
+		case <-port.Changes():
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+// cursorPosition reads one roster entity under the world lock.
+func cursorPosition(a *App, e core.Entity) (pos component.PositionComponent) {
+	a.World().RunSafe(func() { pos, _ = a.World().Positions.GetPosition(e) })
+	return pos
 }
 
 // observeOnly marks every cursor on an instance remote, so it simulates none and

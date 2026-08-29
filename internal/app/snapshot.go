@@ -42,7 +42,7 @@ var denySharedPrefix = []string{
 	"drain.", "dust.", "decay.", "blossom.", "bullet.", "missile.",
 	"lightning.", "flash.", "fadeout.", "splash.", "spirit.", "loot.",
 	"weapon.", "energy.", "heat.", "typing.", "ping.", "boost.",
-	"glyph.", "fuse.", "shield.", "cleaner.", "camera.", "transient.",
+	"glyph.", "nugget.", "fuse.", "shield.", "cleaner.", "camera.", "transient.",
 	"motion_marker.", "materialize.", "soft_collision.", "audio.", "music.",
 	"death.", "timer.",
 	// Combat resolves targets in both domains from one set of counters, so the whole
@@ -92,6 +92,11 @@ func sharedKey(key string) bool {
 	// player-domain population. Named by newBufferTelemetry, which every system
 	// publishing one goes through, so the suffix is the whole rule.
 	if strings.Contains(key, ".buf_") && strings.HasSuffix(key, "_hwm") {
+		return false
+	}
+	// Shared sweep systems count rejected player victims separately so their shared
+	// rejection counter remains comparable across participants.
+	if strings.HasSuffix(key, ".protected_player_rejects") {
 		return false
 	}
 	if allowSharedKey[key] {
