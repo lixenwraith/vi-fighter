@@ -1,6 +1,6 @@
 # Multi-instance domain model — vi-fighter
 
-Status: Phases 4 (including 4.16 verification), 5 and 5.5 landed. Rules
+Status: Phases 4 (including 4.16 verification), 5, 5.5 and 6 landed. Rules
 D-1..D-15 are implemented unless marked. Supersedes every earlier design note.
 
 ## 1. Domains
@@ -32,6 +32,14 @@ smallest artifact that determines the shared outcome crosses as a Bus event:
 | area effect (missile impact, dust detonation) | one explosion request: centers, radius, duration, attack family, owner cursor |
 | drain fusion | one spawn request: header cell only |
 | gold member typed | one composite-member destruction: header, member, typist cursor |
+| decay or drain reaching a shared nugget | one nugget destruction: the nugget identity |
+| a dying drain donating its hit points | one heal request: target and amount |
+| the post-typing cursor advance | one cursor move request: the shared cursor and its cell |
+
+The table is `crossingPushes` in `internal/system/event_class_test.go`, and the
+test fails on a player-profile system pushing a replicated event that is not in
+it. The last three rows were found that way: they are crossings the design did
+not name, and each needs a wire path in Phase 7 exactly as the first four do.
 
 Effects on player targets do not cross. The producer resolves its own domain
 *before* pushing the crossing event; the shared consumer resolves only shared
@@ -61,13 +69,20 @@ from the player counter and may be created conditionally on local view state
 (`Player.IsLocal`). They never feed shared simulation. This is what lets a
 remote cursor's damage land without its visuals cluttering the screen.
 
-**D-7 Ambient domain.** `World.WithDomain(d, fn)` mirrors `WithOrigin`, and
-`PushEventDomain` stamps explicitly for producers outside any scope. One system
-can serve both domains without splitting: a nugget-spawned cleaner is created
-shared, a weapon-spawned cleaner player, and `CleanerSystem` reads the
-request's domain rather than being duplicated. This is the general answer to
-generic types (death, timer, flash, spirit, materialize, species lifecycle) —
-they are stamped, not statically classified.
+**D-7 Ambient domain.** `World.WithDomain(d, fn)` mirrors `WithOrigin`;
+`PushEventDomain` and `PushLocal` stamp explicitly for producers outside any
+scope. One system can serve both domains without splitting: `MaterializeSystem`
+gates a shared species spawn and a player drain from one code path, reading the
+request's domain rather than being duplicated, and stamps the completion with
+the domain of the entity it completed. This is the general answer to generic
+types (death, timer, spirit, materialize, species lifecycle) — they are
+stamped, not statically classified.
+
+Cleaner was this rule's original example and is no longer one. All three
+producers — nugget beacon, weapon, and the `:cleaner` command — push
+`core.DomainPlayer`, the beacon since Phase 5, so every cleaner is
+player-domain and its request events are `Local`. `CleanerSystem` still resolves
+both and keeps its `dual` profile, which is defensive rather than exercised.
 
 **D-8 RNG.** `RandResource.Stream(domain, label)` derives from
 `(sessionRoot, domain, label)`. A system resolving both domains holds one
@@ -93,17 +108,27 @@ replicated), `Bus` (player-originated, affects shared, replicated), `Local`
 The registry table itself is Phase 6; today the class is documented, not
 declared.
 
-*Amendment.* `Stamped` is not only "resolved from the ambient domain at push".
-`EventCombatAttackDirectRequest` is the case that forces the distinction: the
-same producer, in the same tick, under the same ambient domain, pushes a hit
-that crosses when the target is shared and does not when the target is player.
-The class is a function of the payload, not of the producer, so **no static
-per-type table can carry it**. The predicate exists today only as
-`crossingTargets()` in `internal/app/bus_purity_test.go`. Phase 6 closes it one
-of two ways: the journal filter carries the same predicate, or combat producers
-stamp `GameEvent.Domain` from the target's domain and the filter keys on the
-tag. The second is cheaper and D-10 already provides `Stamped` as the
-mechanism, but it is a wiring change across every combat producer.
+The class is declared in the `type.go` doc comment beside the payload —
+`// EventFoo (FooPayload) [bus] ...` — and generated into `eventClasses` in
+`internal/event/registry_gen.go`. `event.Replicated(type, domain)` is the
+transported set. The generator refuses an unclassified constant.
+
+*Resolved: what `Stamped` actually means.* It is not "the ambient domain at
+push". `EventCombatAttackDirectRequest` forces the distinction: the same
+producer, in the same tick, under the same ambient domain, pushes a hit that
+crosses when the target is shared and does not when the target is player. The
+class is a function of the payload, not of the producer, so no static per-type
+table can carry it. Combat producers now stamp from the target's own domain at
+all four push sites, and the filter reads the tag — the cheaper of the two
+options, and the one D-10 already had a mechanism for.
+
+*The tag is only information where a producer set it.* `core.DomainShared` is
+the zero value and the ambient domain defaults to it, so a bare `PushEvent`
+leaves a record reading "shared" whatever produced it. `Shared`, `Bus` and
+`Local` are therefore declarations, checked statically against the pushing
+system's profile (`TestEventClassMatchesSystemProfile`); only `Stamped` is read
+from the tag, and `TestStampedEventsAreExplicitlyStamped` rejects a `Stamped`
+declaration no producer resolves.
 
 **D-11 Determinism invariants.** Across instances: identical shared event
 order, identical shared entity creation order, identical shared RNG derivation,
@@ -152,12 +177,15 @@ participant appears may land, a resize after it will not. The window is one
 event dispatch and the divergence is bounded by the guard immediately after.
 Suppression publishes `context.map_locked` and logs once per resize.
 
-Consequence not yet closed: a map script may branch an FSM guard on
-`viewport_width`, `viewport_height`, `camera_x`, `camera_y` or `color_mode`,
-which are per-instance. Under a locked map those diverge silently. Keys are
-retained; instrumentation is a Phase 6 item. The whole script-visible surface
-is `internal/engine/config_access.go` — eight keys, of which `map_width`,
+Consequence, instrumented rather than closed: a map script may branch an FSM
+guard on `viewport_width`, `viewport_height`, `camera_x`, `camera_y` or
+`color_mode`, which are per-instance, and under a locked map those take a
+different arm on each instance. The whole script-visible surface is
+`internal/engine/config_access.go` — eight keys, of which `map_width`,
 `map_height` and `crop_on_resize` are replicated and the other five are not.
+Both accessors warn once per key when a non-replicated one is read while
+`World.MapSizeLocal()` is false. The keys are retained: D-14 keeps the surface
+and the warning only marks where a script has made itself instance-dependent.
 
 **D-15 Declared classification.** Every system declares its domain profile
 (shared, player, dual) and its dependencies (required, optional). The
@@ -205,7 +233,10 @@ Telemetry: `spatial.player_budget_rejects`, `spatial.indexed_shared`.
 |---|---|
 | **Shared** | cursor, quasar, swarm, storm, snake, eye, pylon, tower, gateway, wall, nugget, gold, marker, explosion centers, FSM, time |
 | **Player** | content glyph, dust, drain, decay, blossom, bullet, missile, orb, lightning, flash, fadeout, splash, motion marker, loot |
-| **Stamped** | cleaner (nugget-spawned shared, weapon-spawned player), materialize (shared when it gates a shared spawn, player for drain), spirit (shared unless the requester is player-domain, which today is always the fuse) |
+| **Stamped** | materialize (shared when it gates a shared spawn, player for drain), spirit (shared unless the requester is player-domain, which today is always the fuse) |
+
+Cleaner was in the stamped row until Phase 6 and is not: every producer pushes
+player, so cleaner entities are player-domain (see D-7).
 
 Cursor components split three ways: shared-and-replicated (position),
 owner-authored (energy, heat, boost, shield, weapon, combat — D-13), and pure
@@ -287,6 +318,11 @@ binding to a slot and belong in `view` — see §7.
 `worldDigestScopedLocked` takes a `DomainScope`, so the shared digest excludes
 player entities.
 
+The journal has the same split by a different mechanism:
+`JournalRecord.Replicated` and `journal.Set.Replicated()` select the transported
+set from a loaded file, which is the record-level counterpart of
+`SnapshotShared` and what D-11's two-journal comparison runs over.
+
 `denySharedPrefix` drops, beyond the `player.` cursor state: this instance's
 view of the map (`context.screen_`, `context.camera_`, `context.mode`), the
 per-instance effect and cursor-state metric groups, and — as a blunt
@@ -296,30 +332,38 @@ deny.
 
 ## 7. Known gaps
 
-- `event.EmitDeath` writes the queue directly, bypassing `PushEvent`, so
-  `WithDomain` does not reach death records. Batches are already domain-pure,
-  which is what determinism needs. `TODO(phase6)` in `sweep.go` and `fuse.go`.
-- Storm red bullets are player-domain but push shared heat and shield drains.
-  Consistent under D-5 only if those records are never transported — must be
-  classified `Local`, not `Bus`.
-- `internal/mode/` grant pushes carry `OriginCommand`, so they are journaled.
-  Retagging them with `PushLocal` changes recorded record domains, which is why
-  they were left out of the Phase 5 sweep and are batched with the Phase 6
-  journal filter.
+- **The area attack is not a crossing artifact.** `CombatAttackAreaRequestPayload`
+  carries `HitEntities`, a plural list that can span domains, so the request
+  names resolved entities rather than geometry and cannot cross under D-4. It is
+  classified `Local`, which is right for the explosion-derived path (D-5) and
+  wrong for the weapon pulse, which pushes it directly at shared targets with no
+  geometry crossing behind it. The pulse should push an explosion request and let
+  each instance resolve its own targets. `TODO(phase7)` in `weapon.go`.
+- **Local-class records are not uniformly stamped.** Phase 5 stamped the
+  owner-authored grants and D-6 effects, Phase 6 stamped `internal/mode`, and 19
+  types are still pushed in the ambient domain from `app`, `engine`, `fsm` and
+  the shared species systems. The class already keeps them out of the transported
+  set, so this is metadata rather than behaviour — but a per-instance effect
+  journaled as shared is a record two instances legitimately differ on while
+  claiming they should not. Pinned by `unstampedLocal` in
+  `internal/app/local_stamp_test.go`, which only permits the set to shrink.
 - The `player` snapshot record carries the local binding (`entity`, `slot`,
   `x`, `y`) in a record §6 calls shared. It passes today only because both
   instances in `TestSharedSnapshotParityAcrossTerminalSizes` bind slot 0. The
   binding fields move to `view`; `count` stays.
+- `spatial.indexed_shared` is genuinely comparable and is dropped by the
+  `spatial.` prefix deny. Wants an allow-list.
 - `World.UpdateBoundsRadius` writes `PingComponent` for every rostered cursor
   including remote ones. Harmless under D-13 — pure local view, reaches no
   digest — but restricting it to the local slot forces `setLocal` to clear the
   departing slot.
 - `uint32(entity)` narrowing at `gateway.go` and `adaptation.go` is safe only
   while route-graph anchors are shared (tag 0).
-- `internal/journal` (the JSONL reader) has zero test coverage and exactly one
-  non-test importer, `internal/app/play.go`. A `core.DomainNames` change
-  silently breaks `vif play` with nothing to catch it.
 - A recording wider than the terminal is clipped by the render buffer. The pan
   offset in `play.go` is the seam a windowed composite replaces. Deferred; it
   is a presentation problem with no shared-state component.
-- Journal schema is 6.
+- Journal schema is 7.
+
+Closed by Phase 6: `EmitDeath` now stamps from the entities dying rather than
+bypassing the tag; storm red bullets and the `internal/mode` grants are `Local`
+and stamped; `internal/journal` has round-trip coverage.
