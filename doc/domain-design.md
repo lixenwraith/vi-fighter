@@ -1,7 +1,7 @@
 # Multi-instance domain model — vi-fighter
 
-Status: Phases 4 (including 4.16 verification), 5 and 5.5 landed. Rules
-D-1..D-15 are implemented unless marked. Supersedes every earlier design note.
+Status: Phases 4, 5 and 5.5 landed, verification included. Rules D-1..D-15 are
+implemented unless marked. Supersedes every earlier design note.
 
 ## 1. Domains
 
@@ -48,7 +48,8 @@ every instance credits the same one. Timeout and destruction leave it zero.
 **D-4 Payload purity.** A Bus payload names only shared entities. Player
 emitters are reduced to coordinates and velocity (`HasOrigin`, `OriginX/Y`,
 `HasVelocity`, `OriginVelX/Y`). A Local payload may name player entities
-freely — `EventFuseSwarmRequest` and the lightning triple do.
+freely — `EventFuseSwarmRequest` and the lightning triple do. Asserted over a
+soak by `TestBusPayloadsNameOnlySharedEntities` in `internal/app`.
 
 **D-5 Derived, not transported.** Events a shared system produces from a Bus
 event are re-derived identically on every instance and must never themselves be
@@ -69,13 +70,20 @@ request's domain rather than being duplicated. This is the general answer to
 generic types (death, timer, flash, spirit, materialize, species lifecycle) —
 they are stamped, not statically classified.
 
+The ambient tag is **not** derived from the declared system profile:
+`UpdateLocked` sets the audit scope from `SystemDef.Domain` but leaves
+`World.domain` alone, so an unscoped `PushEvent` from a player-profile system
+still stamps `shared`. Opting in is the producer's job — see D-10.
+
 **D-8 RNG.** `RandResource.Stream(domain, label)` derives from
 `(sessionRoot, domain, label)`. A system resolving both domains holds one
 stream per domain and selects by the target's domain; `CombatSystem` and
-`SoftCollisionSystem` are the only two. A wholly player-domain system draws one
-player stream: `FuseSystem`, `DrainSystem`, `LootSystem`, `LightningSystem`. No
-simulation path seeds from a clock; `TimeResource.GameTimeNano` is explicitly
-not a seed source.
+`SoftCollisionSystem` are the only two, asserted by
+`TestCombatKnockbackDrawsFromTheTargetsStream` and
+`TestSoftCollisionImpulseDrawsFromTheTargetsStream`. A wholly player-domain
+system draws one player stream: `FuseSystem`, `DrainSystem`, `LootSystem`,
+`LightningSystem`. No simulation path seeds from a clock;
+`TimeResource.GameTimeNano` is explicitly not a seed source.
 
 **D-9 Entity identity.** `World.nextEntityID [2]uint64`; `CreateEntity(domain)`
 explicit at every call site; `Clear()` resets both. Zero remains invalid in
@@ -83,15 +91,29 @@ both domains. Created and destroyed counts are tracked per domain
 (`CreatedCountDomain`, `DestroyedCountDomain`); the aggregate accessors sum
 them.
 
-**D-10 Event domain.** `GameEvent.Domain` stamped at push from the ambient
-domain. `World.PushLocal` stamps `DomainPlayer` explicitly, and is the push
-site for owner-authored grants (energy, heat, boost, shield, weapon) and D-6
-effects (sound, blinks, flash, fadeout, splash, strobe, grayout). The tag never
-affects dispatch. Registry classes: `Shared` (emitted and consumed shared,
-replicated), `Bus` (player-originated, affects shared, replicated), `Local`
-(never replicated), `Stamped` (class determined per-event rather than per-type).
-The registry table itself is Phase 6; today the class is documented, not
-declared.
+**D-10 Event domain.** `GameEvent.Domain` is stamped at push from the ambient
+domain and carried through to `JournalRecord.Domain`, which the vlog sink
+writes and `internal/journal` parses. Registry classes: `Shared` (emitted and
+consumed shared, replicated), `Bus` (player-originated, affects shared,
+replicated), `Local` (never replicated), `Stamped` (class determined per-event
+from the domain tag). The registry table itself is Phase 6; today the class is
+documented, not declared.
+
+Two facts constrain how the table can be built:
+
+- The tag is opt-in. `World.PushLocal` is the only opt-in in wide use, and it
+  hard-codes `DomainPlayer`; everything else inherits the shared default (D-7).
+  A soak census over three seeds tags 70 of the 91 observed types `shared`,
+  including unambiguous D-6 effects that are emitted from FSM actions rather
+  than from a system. A `Local` class is therefore a *claim about producers*
+  that has to be enforced, not a fact readable off today's tags.
+- `Stamped` is genuinely per-instance for at least two types.
+  `EventCombatAttackDirectRequest` crosses only when
+  `ChainDepth == 0 && TargetEntity.Domain() == DomainShared`; the same census
+  shows `EventSpeciesKilled` mixed (53 player, 1 shared) from one producer. No
+  static per-type table can carry either. Either the filter holds the same
+  predicate, or the producers stamp `GameEvent.Domain` from the target's domain
+  and the filter keys on the tag.
 
 *Amendment.* `Stamped` is not only "resolved from the ambient domain at push".
 `EventCombatAttackDirectRequest` is the case that forces the distinction: the
@@ -108,8 +130,9 @@ mechanism, but it is a wiring change across every combat producer.
 **D-11 Determinism invariants.** Across instances: identical shared event
 order, identical shared entity creation order, identical shared RNG derivation,
 identical shared component values except where D-13 applies. Verified by
-comparing `App.SnapshotShared()` between instances and by stripping player
-records from two journals and asserting equality.
+comparing `App.SnapshotShared()` between instances
+(`TestSharedSnapshotParityAcrossTerminalSizes`) and by stripping player records
+from two journals and asserting equality.
 
 **D-12 Claimed geometry.** A shared system that *claims* cells — spawn
 footprint clear, composite sweep-over, wall push-out — enumerates both domains
@@ -118,7 +141,9 @@ function of the cell set and protection masks alone, so it is identical on
 every instance; player victims differ per instance and are player-domain
 effects by D-6. The constraint is on *emission*: victims leave as one death
 batch per domain (`internal/system/sweep.go`, `cellSweep`), so a shared record
-never names a player entity.
+never names a player entity. The cross-domain reads this needs are exempted
+one at a time in `allowedDomainAccess`, and `TestAllowedDomainAccessIsLive`
+fails an exemption that outlives the access it excuses.
 
 **D-13 Owner-authored shared state.** A shared entity may carry components
 written by exactly one instance and replicated as values rather than
@@ -131,12 +156,11 @@ identically or owner-authored and transported — never both. Owner-authored
 state must not appear in a cross-instance digest, and the metric keys mirroring
 it are excluded by `denySharedPrefix` in `internal/app/snapshot.go`.
 
-`Shield` and `Combat` are on the D-13 list but are not cursor-exclusive:
-`Shield` also carries quasar state and the loot pickup glow, and `Combat` also
-carries species state, both re-derived rather than transported. The static
-check (`ownerAuthoredStores` in `internal/system/domain_test.go`) therefore
-cannot key on store name alone and excludes both; they are covered by the
-declared profile of their writers instead.
+The static check keys on store name, so it covers only the cursor-exclusive
+half: `ownerAuthoredStores` in `internal/system/domain_test.go` lists Energy,
+Heat, Boost, Weapon, CursorView, Ping and Pulse. `Shield` and `Combat` are
+excluded deliberately — they also carry quasar, loot and species state, which
+is re-derived, and the store name alone cannot separate the two populations.
 
 **D-14 Map bounds authority.** `MapWidth`, `MapHeight` and `CropOnResize` are
 shared simulation state with two writers:
@@ -150,7 +174,9 @@ shared simulation state with two writers:
 The join race is accepted: a resize already in flight when the second
 participant appears may land, a resize after it will not. The window is one
 event dispatch and the divergence is bounded by the guard immediately after.
-Suppression publishes `context.map_locked` and logs once per resize.
+Suppression publishes `context.map_locked` and logs once per resize. Both
+branches are covered: `TestMapSizeLockedWithSecondCursor` and
+`TestMapSizeCropsWithOneCursor` as its negative control.
 
 Consequence not yet closed: a map script may branch an FSM guard on
 `viewport_width`, `viewport_height`, `camera_x`, `camera_y` or `color_mode`,
@@ -160,24 +186,22 @@ is `internal/engine/config_access.go` — eight keys, of which `map_width`,
 `map_height` and `crop_on_resize` are replicated and the other five are not.
 
 **D-15 Declared classification.** Every system declares its domain profile
-(shared, player, dual) and its dependencies (required, optional). The
-declaration site is `internal/manifest/definition.go`: `SystemDef.Domain`,
-`Requires` and `Optional`, generated into `internal/manifest/build_gen.go` as
-`systemProfiles` and resolved by `manifest.ProfileFor(name)`, which
-`World.AddSystem(sys, profile)` takes. Systems do not declare `Domain()` or
-`Requires()` methods — the methods were deleted rather than asserted, so there
-is one declaration site and no drift to detect
-(`TestSystemsDeclareNoDomainMethod`). Component domain is declared the same
-way, as `ComponentDef.Domain`, generated into
-`internal/engine/component_domain_gen.go`.
-
-The declaration is the authority: the boundary suite asserts the code matches
-it, and the FSM's `enabled_systems`/`disabled_systems` validation rejects a map
-that disables a required dependency. Filename lists are not a classification
-mechanism and are not maintained. Dependency order is initialization and
-requirement order, resolved topologically by `core.TopoSort`; it is distinct
-from `System.Priority()`, which orders `Update()` within a tick, and the two
-are permitted to correlate without being conflated.
+(shared, player, dual) and its dependencies (required, optional) as data in
+`internal/manifest/definition.go`. That file is the sole declaration site:
+`System` carries no `Domain()` or `Requires()` method, `World.AddSystem` takes
+a `manifest.ProfileFor(name)`, and `TestSystemsDeclareNoDomainMethod` fails a
+system that reintroduces either. The generator emits
+`internal/manifest/build_gen.go` and `internal/engine/component_domain_gen.go`;
+the boundary suite asserts the code matches the declaration, and the FSM's
+`enabled_systems`/`disabled_systems` validation rejects a map that disables a
+required dependency. Filename lists are not a classification mechanism and are
+not maintained — the one unattributed set (`blast.go`, `interaction.go`,
+`sweep.go`, `targeting.go`, `telemetry.go`) is pinned by
+`TestHelperFilesArePinned` so a new helper is visible rather than silently
+unattributed. Dependency order is initialization and requirement order,
+resolved topologically by the shared resolver in `internal/core`; it is
+distinct from `System.Priority()`, which orders `Update()` within a tick, and
+the two are permitted to correlate without being conflated.
 
 ## 3. Spatial partition
 
@@ -204,7 +228,7 @@ Telemetry: `spatial.player_budget_rejects`, `spatial.indexed_shared`.
 | Domain | Entities |
 |---|---|
 | **Shared** | cursor, quasar, swarm, storm, snake, eye, pylon, tower, gateway, wall, nugget, gold, marker, explosion centers, FSM, time |
-| **Player** | content glyph, dust, drain, decay, blossom, bullet, missile, orb, lightning, flash, fadeout, splash, motion marker, loot |
+| **Player** | glyph, dust, drain, decay, blossom, bullet, missile, orb, lightning, flash, fadeout, splash, motion marker, loot |
 | **Stamped** | cleaner (nugget-spawned shared, weapon-spawned player), materialize (shared when it gates a shared spawn, player for drain), spirit (shared unless the requester is player-domain, which today is always the fuse) |
 
 Cursor components split three ways: shared-and-replicated (position),
@@ -229,40 +253,51 @@ component absence, iteration order) that happened to hold.
 participant may claim, and the claim itself is a shared outcome every instance
 agrees on: `NuggetSystem.collectionCursor` and `GoldSystem.handleJumpRequest`
 resolve over the whole roster and their sequence state is shared. Only the
-*reward* is owner-authored (D-13). This is the deliberate opposite of loot,
-which is rolled and owned per participant (D-6) precisely because its drop
-table reads per-cursor inventory. A mechanic is contested when the outcome is a
-function of shared state alone; personal when it reads owner-authored state.
+*reward* is owner-authored (D-13). Credit is a deterministic function of the
+shared event stream: `GoldSystem` tallies `EventCompositeMemberDestroyed` per
+roster slot and `GoldCompletionPayload.Entity` names the cursor that typed the
+most members, ties breaking to the lowest slot, zero on timeout or destruction.
+This is the deliberate opposite of loot, which is rolled and owned per
+participant (D-6) precisely because its drop table reads per-cursor inventory.
+A mechanic is contested when the outcome is a function of shared state alone;
+personal when it reads owner-authored state.
 
-Every `ClosestCursor` site is contested: deterministic slot order over
-positions only. The one site that was not, `NuggetSystem.emitBeacon`, now uses
-`PushLocal`, so a shared nugget beacon draws each instance's own cleaners
-rather than one shared cleaner carrying pure visuals.
+**Glyph.** Content glyphs are player-domain — every instance derives the same
+corpus from the same seed, so a glyph is re-derived rather than replicated, and
+`GlyphSystem` carries a `player` profile. The exception is a gold sequence
+member, which is a shared composite member that happens to carry
+`GlyphComponent`. `GlyphBit` therefore stays unlisted in `manifest.Components`:
+the bit legitimately attaches in either domain, and no static rule can separate
+the two populations. The mechanism is a guard, not a mask — player-domain
+mechanics that sweep glyphs (dust conversion, cleaner, decay, blossom, splash,
+drain, typing) skip `e.Domain() != core.DomainPlayer`, one invariant replacing
+three accidental protections. `TestSharedGlyphsAreGoldMembersOnly` asserts the
+other direction: every shared-domain glyph is a gold composite member.
 
 ## 5. System classification
 
-Per D-15 the declarations in `internal/manifest/definition.go` are
-authoritative and this document does not restate them — read `Systems` there,
-where each entry carries a one-line rationale for its profile. The shape worth
-knowing:
+Per D-15 the declarations live in `internal/manifest/definition.go` and are
+generated into `manifest.systemProfiles`. The list is not restated here; read
+`Systems` and `ContextSystems` in that file, where each entry carries a
+one-line rationale for its profile. What the document owns is the invariants
+the list must satisfy:
 
-- Cursor gameplay systems (`energy`, `heat`, `boost`, `shield`, `weapon`,
-  `typing`, `ping`) are **player**, not shared: they author D-13 state for the
-  local cursor only.
-- Dual-domain systems are the stamped set (D-7): `cleaner`, `materialize`,
-  `spirit`, `death`, `timer`, plus the two that hold one RNG stream per domain
-  (D-8), `combat` and `soft_collision`.
-- Shared species systems with `cellSweep` claimed-geometry sites (D-12): `eye`,
-  `quasar`, `swarm`, `snake`, `storm`, `wall`.
-- `explosion` is shared and is the crossing artifact, not an effect;
-  `marker` is the one shared effect system.
+- A `dual` profile means the system resolves the domain per request or per
+  target (D-7, D-8) — not that it writes both domains indiscriminately.
+- A `shared` profile that reads a player store needs an `allowedDomainAccess`
+  exemption naming the D-12 site that justifies it.
+- A `player` profile may write the D-13 owner-authored set; a `shared` profile
+  may not, except `cursor`, which creates the entity and writes constants that
+  shared creation order already carries.
 
-`MetaSystem` is declared in `ContextSystems` because it takes a `GameContext`
-rather than a `World`, so `BuildSystems` cannot construct it. Its profile is
-`shared` and honest: its world writes are replicated or are the D-14
-map-bounds write, and the context state it writes is not world state.
-`NetworkSystem` is written but registered nowhere and carries a
-`TODO(phase7)`; `internal/system/domain_test.go` exempts it by name.
+`ContextSystems` holds the systems `App` registers directly because they take a
+`GameContext` rather than a `World`; `meta` is the only member. Its profile is
+`shared`: its world writes are replicated or are the D-14 map-bounds writer,
+and the context state it writes is not world state.
+
+`internal/system/network.go` declares no profile because `NetworkSystem` is
+written but registered nowhere; `TODO(phase7)` marks it, and
+`TestSystemDomainProfiles` exempts it by name.
 
 ## 6. Telemetry and snapshots
 
@@ -278,48 +313,54 @@ Three snapshot views over one reading:
 |---|---|---|
 | `Snapshot` | nothing | `:d save`, perturbation test |
 | `SnapshotSimulation` | operator surface (`denySim`, session record) | replay vs. source run |
-| `SnapshotShared` | owner-authored state (`denySharedPrefix`, view record, local digest scope) | cross-instance comparison |
+| `SnapshotShared` | owner-authored state (`denySharedPrefix`, `denySharedField`, view and session records, local digest scope) | cross-instance comparison |
 
-`SnapshotContext` emits five records. `context` and `world` are shared; `view`
-and `session` are this instance's. `player` is presently mixed: `count` is the
-shared roster size, but `entity`, `slot`, `x` and `y` are this instance's
-binding to a slot and belong in `view` — see §7.
+`denySharedPrefix` covers, besides the per-slot `player.` group and the
+per-system effect groups: `context.screen_`, `context.camera_` and
+`context.mode`, which mirror fields the `view` record already drops; and
+`event.` and `spatial.`, which are instance-local traffic and index counts.
+`denySharedField` drops `created_local`/`destroyed_local` from the otherwise
+shared `world` record.
+
+`SnapshotContext` emits five records: `context`, `world` and `player` are
+emitted into the shared view, `view` and `session` are dropped from it.
 `worldDigestScopedLocked` takes a `DomainScope`, so the shared digest excludes
 player entities.
 
-`denySharedPrefix` drops, beyond the `player.` cursor state: this instance's
-view of the map (`context.screen_`, `context.camera_`, `context.mode`), the
-per-instance effect and cursor-state metric groups, and — as a blunt
-instrument — `event.` and `spatial.`. `spatial.indexed_shared` is genuinely
-comparable and is dropped with the rest; it wants an allow-list, not a prefix
-deny.
+The `player` record is misplaced. It carries `count`, which is the shared
+roster size, alongside `entity`, `slot`, `x` and `y`, which are this instance's
+binding to its own cursor. Parity holds today only because both instances in
+`TestSharedSnapshotParityAcrossTerminalSizes` bind slot 0. The fix is a split:
+`count` stays in a shared record, the binding moves to `view`.
 
 ## 7. Known gaps
 
 - `event.EmitDeath` writes the queue directly, bypassing `PushEvent`, so
   `WithDomain` does not reach death records. Batches are already domain-pure,
   which is what determinism needs. `TODO(phase6)` in `sweep.go` and `fuse.go`.
-- Storm red bullets are player-domain but push shared heat and shield drains.
-  Consistent under D-5 only if those records are never transported — must be
-  classified `Local`, not `Bus`.
-- `internal/mode/` grant pushes carry `OriginCommand`, so they are journaled.
-  Retagging them with `PushLocal` changes recorded record domains, which is why
-  they were left out of the Phase 5 sweep and are batched with the Phase 6
-  journal filter.
-- The `player` snapshot record carries the local binding (`entity`, `slot`,
-  `x`, `y`) in a record §6 calls shared. It passes today only because both
-  instances in `TestSharedSnapshotParityAcrossTerminalSizes` bind slot 0. The
-  binding fields move to `view`; `count` stays.
+- Every system-side producer of the owner-authored grant family
+  (`EventEnergyAddRequest`, `EventHeatAddRequest`, `EventShieldDrainRequest`,
+  `EventWeaponAddRequest`, and the storm and bullet drains) already pushes
+  through `PushLocal`. The remaining producers are the operator commands in
+  `internal/mode/commands.go`, which push with the ambient shared tag under
+  `OriginCommand` and are therefore journaled: retagging them changes recorded
+  record domains, so it belongs in the Phase 6 batch with the journal filter.
+- `spatial.indexed_shared` is genuinely comparable across instances and is
+  dropped with the rest of the `spatial.` prefix. It wants an allow-list, not a
+  prefix deny; the shared position digest covers it meanwhile.
+- The `ctx|player` snapshot record carries the local binding — see §6.
 - `World.UpdateBoundsRadius` writes `PingComponent` for every rostered cursor
-  including remote ones. Harmless under D-13 — pure local view, reaches no
-  digest — but restricting it to the local slot forces `setLocal` to clear the
-  departing slot.
+  including remote ones. Harmless under D-13, since ping is pure local view and
+  reaches no digest; restricting it to the local slot forces `setLocal` to
+  clear the departing slot.
 - `uint32(entity)` narrowing at `gateway.go` and `adaptation.go` is safe only
   while route-graph anchors are shared (tag 0).
-- `internal/journal` (the JSONL reader) has zero test coverage and exactly one
-  non-test importer, `internal/app/play.go`. A `core.DomainNames` change
-  silently breaks `vif play` with nothing to catch it.
+- `internal/journal` has zero test coverage. Its one non-test importer is
+  `internal/app/play.go`, so a `DomainNames` or field-name change breaks
+  `vif play` with nothing to catch it.
 - A recording wider than the terminal is clipped by the render buffer. The pan
   offset in `play.go` is the seam a windowed composite replaces. Deferred; it
   is a presentation problem with no shared-state component.
-- Journal schema is 6.
+- Journal schema is 6. Records already carry `Domain`, written by `vlogSink`
+  and parsed by `internal/journal/read.go`, so the Phase 6 filter needs a bump
+  only if it adds a field.
