@@ -105,77 +105,89 @@ asserted — one declaration site, no drift.
 `internal/system/network.go` carries a `TODO(phase7)`: it is written but
 registered nowhere, and `domain_test.go` exempts it by name.
 
-## Phase 6 — Event classification and journal completeness
+## Phase 6 — Event classification and journal completeness · complete
 
-The prerequisite for any wire format. Largest mechanical phase; 167 event types
-(`EventTypeCount`, including `EventNone`).
+167 event types (`EventTypeCount`, including `EventNone`); 166 classified.
 
-**The finding that shapes this phase.** `EventCombatAttackDirectRequest` is
-`Stamped`, and `Stamped` is not "resolved from the ambient domain at push". Its
-class is per-instance, resolved by the *target's* domain: the same producer, in
-the same tick, under the same ambient domain, pushes a hit that crosses when the
-target is shared and does not when the target is player. **No static per-type
-table can carry it.** The predicate exists today only as `crossingTargets()` in
-`internal/app/bus_purity_test.go`. See the D-10 amendment. Item 1 must decide
-this before the table is populated, because the answer changes what the table
-means.
+**The finding the phase turned on.** `EventCombatAttackDirectRequest` is
+`Stamped`, and `Stamped` is not "the ambient domain at push": the same producer,
+in the same tick, under the same ambient domain, pushes a hit that crosses when
+the target is shared and does not when the target is player. No static per-type
+table can carry it. **Resolved by producer stamping** — the four push sites
+resolve the target's own domain and the filter reads the tag. This was the
+cheaper of the two options and the one D-10 already had a mechanism for.
 
-1. **Registry classes.** Add `Shared|Bus|Local|Stamped`, derived from a
-   doc-comment annotation the way payloads already are. The generator is
-   `internal/gen-manifest/main.go` (*not* `internal/manifest/cmd/main.go`,
-   which does not exist); `docPayload` already cuts the constant name and an
-   optional `(Payload)` off the doc line, so a class marker in the remainder
-   parses with a sibling `docClass` and no second mechanism:
+**The finding that reshaped the rest.** `core.DomainShared` is the zero value
+and the ambient domain defaults to it, so `GameEvent.Domain` is not a
+producer-domain oracle: a bare `PushEvent` leaves a record reading "shared"
+whatever produced it. `Shared`, `Bus` and `Local` are therefore declarations
+checked statically against the pushing system's profile, and only `Stamped` is
+read from the tag. A runtime test that assumed otherwise measured stamping
+coverage rather than domain truth.
 
-   ```
-   // EventFoo (FooPayload) [bus] short description
-   // EventFoo [local] short description
-   ```
+1. **Registry classes · done.** Declared in the `type.go` doc comment, extending
+   the payload grammar rather than adding a second mechanism:
+   `// EventFoo (FooPayload) [bus] description`. `docPayload` became `docAnnot`
+   and consumes both groups in either order. The generator is
+   `internal/gen-manifest/main.go` and refuses an unclassified constant the way
+   it already refuses a forgotten payload annotation. It emits a dense
+   `[EventTypeCount]EventClass` array plus `ClassOf`, rather than widening
+   `RegisterType`: the filter indexes it per record, and registration is about
+   name and payload, not replication.
+2. **`EmitDeath` stamping · done, with no signature change.** The record takes
+   the domain of the entities dying, which cannot disagree with them the way a
+   passed or ambient domain could, and mixed input splits into one batch per
+   domain. That makes D-12's batch purity structural rather than conventional
+   and closes the `TODO(phase6)` without touching the 38 call sites the plan
+   budgeted for.
+3. **Storm red bullets and `internal/mode` · done.** The storm half was already
+   closed: all four sites use `PushLocal` and the class table now names those
+   events `Local`. `internal/mode` is this instance's input by definition, so 37
+   `Local`-class sites and the three `Bus` crossings it originates now stamp
+   player. `GameContext` gained `PushLocal`.
+4. **Journal filter · done.** `JournalRecord.Domain` already existed and was
+   already populated, and the reader already round-tripped it, so the missing
+   piece was the predicate: `JournalRecord.Replicated` and
+   `journal.Set.Replicated()`. Schema 6 to 7 — no field moved, but `Domain`
+   changed meaning, so the two are not comparable. `ConfigFromAnchor` and the
+   replay anchor check both read the constant and followed with no change. No
+   fixtures existed to regenerate.
+5. **View-key instrumentation · done, and far smaller than recorded.** The plan
+   pointed at `internal/fsm/config_access.go`, which does not exist, and warned
+   that `internal/fsm/std/` had never been read; neither is involved. The
+   surface is `internal/engine/config_access.go`: two maps, eight keys. Three
+   replicated (`map_width`, `map_height`, `crop_on_resize`), five not. Both
+   accessors warn once per key when a non-replicated one is read while
+   `World.MapSizeLocal()` is false. `mapSizeLocal` moved to `World`.
 
-   Emit a dense `[EventTypeCount]EventClass` array plus `ClassOf(et)` rather
-   than widening `RegisterType`: the journal filter indexes it per record, and
-   registration is about name and payload, not replication. Stage the
-   enforcement — warn on a missing class while populating, then error, so the
-   generator ends up refusing an unclassified constant the way it already
-   refuses a forgotten payload annotation.
+**Exit criterion, met.** `TestBusPayloadsNameOnlySharedEntities` reads the class
+table rather than its `busEvents` hand-list, and skips a non-replicated record
+whole rather than asserting its emitter fields. `crossingTargets` is gone. Every
+event type has a class.
 
-   **Open question, blocks the rest of the phase.** For `Stamped`, either the
-   journal filter carries the `crossingTargets()` predicate, or combat
-   producers stamp `GameEvent.Domain` from the target's domain and the filter
-   keys on the tag. The second is cheaper and D-10 already provides `Stamped`
-   as the mechanism; `PushLocal` establishes the tagging pattern. It is a
-   wiring change across every combat producer.
+### What the classification found
 
-2. **`EmitDeath` stamping.** Add the domain parameter and thread it through.
-   Scope is larger than previously recorded: **38 call sites across 11 files** —
-   `splash.go` (8), `drain.go` (7), `decay.go` (6), `wall.go` (5), `dust.go`,
-   `fuse.go`, `sweep.go`, `typing.go`, `weapon.go` (2 each), `cleaner.go`,
-   `composite.go` (1 each). Closes the `TODO(phase6)` in `sweep.go` and
-   `fuse.go`.
-
-3. **Storm red bullets** classified `Local`. `internal/mode/` grant pushes
-   retagged in the same batch: they carry `OriginCommand` and so are journaled,
-   which is why Phase 5 left them out — retagging changes recorded record
-   domains and belongs with the filter that reads them.
-
-4. **Journal filter.** `JournalRecord.Domain` already exists and is already
-   populated ("producer domain; replication filters on it"); what is missing is
-   the filter. The transported set is `Shared ∪ Bus`. Journal schema bumps
-   6 → 7; `ConfigFromAnchor` and `VerifyAnchor` follow. **No fixtures to
-   regenerate** — the schema constant and the in-memory round-trip tests are
-   the whole surface.
-
-5. **View-key instrumentation.** Much smaller than recorded, and in a different
-   package: the script-visible surface is `internal/engine/config_access.go`,
-   40 lines, two maps, eight keys. `internal/fsm/config_access.go` does not
-   exist and `internal/fsm/std/` is not needed. Replicated: `map_width`,
-   `map_height`, `crop_on_resize`. Non-replicated: `viewport_width`,
-   `viewport_height`, `camera_x`, `camera_y`, `color_mode`. Warn once when one
-   of the five is read while `mapSizeLocal()` is false. Keys stay (D-14).
-
-**Exit criterion.** `TestBusPayloadsNameOnlySharedEntities` runs against the
-declared Bus set rather than its hand-list (`busEvents`), and every event type
-has a class.
+- **The D-3 table had four rows; the code has eleven.**
+  `TestEventClassMatchesSystemProfile` checks every statically resolvable push
+  against the class and the pusher's profile, and its exemption list,
+  `crossingPushes`, is the D-3 table as code. Three crossings the design never
+  named came out of it: decay and drain destroying a shared nugget, a dying
+  drain donating hit points, and the post-typing cursor advance. Each needs a
+  wire path in Phase 7.
+- **Cleaner is no longer stamped.** All three producers push
+  `core.DomainPlayer` — the nugget beacon since Phase 5 — so D-7's canonical
+  example of a dual-domain system was stale. Its events are `Local`.
+- **The area attack is not a crossing artifact.** `HitEntities` is a plural list
+  that can span domains, so `EventCombatAttackAreaRequest` names resolved
+  entities rather than geometry. `Local`, with the weapon pulse's direct push at
+  shared targets recorded as a gap.
+- **Three unearned `Stamped` declarations.** `EventSpeciesCreated` was pushed
+  unstamped by drain while `EventSpeciesKilled` was stamped three ways over;
+  `EventMaterializeComplete` did not carry the domain it completed;
+  `EventMetaSystemCommandRequest` is `Shared`, since enabling a system on one
+  instance and not another diverges the simulation outright.
+- **19 `Local` types still push unstamped** from `app`, `engine`, `fsm` and the
+  shared species systems. Pinned by `unstampedLocal`, which may only shrink.
 
 ## Phase 7 — Transport
 
@@ -196,6 +208,22 @@ has a class.
    everything else re-derives. `Shield` and `Combat` need a field-level split
    here: both carry re-derived species state alongside the cursor state.
 5. **Bus event transport**, driven by the Phase 6 classification.
+   `event.Replicated(type, domain)` is the send predicate and `crossingPushes`
+   in `internal/system/event_class_test.go` enumerates the eleven producer sites
+   it must cover. Two distinctions Phase 6 deliberately left to this phase:
+   - **Compared is not sent.** The class table answers "must both instances have
+     this record", which is what the journal filter needs. A `Shared` event is
+     re-derived identically on both instances and must be compared but never
+     sent; a `Bus` event must be sent. The wire set is `Bus` plus `Stamped`
+     resolving shared, not the whole transported set.
+   - **D-5 chains.** A chain attack is stamped by its target like any other, so
+     it is in the transported set. It must not be on the wire: the receiver
+     derives it from the root the wire carried, and sending both applies it
+     twice.
+6. **The unclosed crossings.** The weapon pulse pushes an area attack at shared
+   targets with no geometry crossing behind it (see the domain document's gaps),
+   and 19 `Local` types still push unstamped. Both need closing before the wire
+   carries anything.
 
 ## Phase 8 — Multi-instance verification
 
@@ -221,9 +249,6 @@ Each is small, self-contained, and independent of the phase order.
 - **`spatial.indexed_shared` allow-list.** The `spatial.` prefix deny drops one
   genuinely comparable key. Wants an allow-list, not a prefix deny.
   `internal/app/snapshot.go`.
-- **`internal/journal` round-trip coverage.** Zero tests; one non-test importer
-  (`internal/app/play.go`). A `core.DomainNames` change silently breaks
-  `vif play` with nothing to catch it.
 - **`World.UpdateBoundsRadius`** writes `PingComponent` for every rostered
   cursor including remote ones. Harmless under D-13 — pure local view, reaches
   no digest — but restricting it to the local slot forces `setLocal` to clear
