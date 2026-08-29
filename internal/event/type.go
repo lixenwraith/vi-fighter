@@ -146,11 +146,11 @@ const (
 
 	// --- Nugget ---
 
-	// EventNuggetCollected (NuggetCollectedPayload) [shared] signals nugget was collected by player
+	// EventNuggetCollected (NuggetCollectedPayload) [local] signals the personal nugget was collected
 	EventNuggetCollected
-	// EventNuggetDestroyed (NuggetDestroyedPayload) [shared] signals nugget was destroyed externally
+	// EventNuggetDestroyed (NuggetDestroyedPayload) [local] signals the personal nugget was destroyed externally
 	EventNuggetDestroyed
-	// EventNuggetJumpRequest (NuggetJumpRequestPayload) [bus] signals player intent to jump to active nugget
+	// EventNuggetJumpRequest (NuggetJumpRequestPayload) [local] signals player intent to jump to their active nugget
 	EventNuggetJumpRequest
 
 	// --- Cleaner ---
@@ -336,6 +336,8 @@ const (
 	EventCursorMoveRequest
 	// EventCursorMoved (CursorMovedPayload) [shared] announces an applied cursor position
 	EventCursorMoved
+	// EventCursorDefeatState (CursorDefeatStatePayload) [bus] carries one owner's terminal lifecycle state
+	EventCursorDefeatState
 	// EventCursorSetLocalRequest (CursorSetLocalPayload) [local] rebinds which cursor input and camera follow
 	EventCursorSetLocalRequest
 	// EventCursorLocalChanged (CursorSetLocalPayload) [local] announces the bound slot
@@ -347,6 +349,8 @@ const (
 	EventSpeciesCreated
 	// EventSpeciesKilled (SpeciesKilledPayload) [stamped] announces a terminated species instance
 	EventSpeciesKilled
+	// EventDrainDefeated [bus] advances shared progression for one personal drain death
+	EventDrainDefeated
 
 	// --- Fuse ---
 
@@ -414,7 +418,9 @@ const (
 	EventCombatAttackDirectRequest
 	// EventCombatAttackAreaRequest (CombatAttackAreaRequestPayload) [local] signals applying knockback
 	EventCombatAttackAreaRequest
-	// EventCombatHealRequest (CombatHealRequestPayload) [shared] requests adding hit points to a live combat entity
+	// EventCombatAttackAreaCrossingRequest (CombatAttackAreaRequestPayload) [bus] carries an owner-resolved area hit on shared targets
+	EventCombatAttackAreaCrossingRequest
+	// EventCombatHealRequest (CombatHealRequestPayload) [bus] requests adding hit points to a live combat entity
 	EventCombatHealRequest
 
 	// --- Loot ---

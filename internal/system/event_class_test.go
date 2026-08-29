@@ -27,8 +27,8 @@ var stampingPush = map[string]bool{
 	"PushLocal": true, "PushEventDomain": true, "PushEventFull": true, "PushCrossing": true,
 }
 
-// crossingPushes is the D-3 table as code: every push of a replicated event by a
-// player-profile system, keyed "system:EventName", with the artifact that crosses.
+// crossingPushes is the D-3 table as code: every owner-resolved push of a
+// replicated event, keyed "system:EventName", with the artifact that crosses.
 // Adding a player-domain push of a shared or bus event without an entry here fails
 // TestEventClassMatchesSystemProfile; an entry that stops describing real code
 // fails TestCrossingPushesAreLive.
@@ -37,6 +37,7 @@ var crossingPushes = map[string]string{
 	// duration, attack family and owner cursor.
 	"missile:EventExplosionRequest":   "missile impact; the explosion centers cross",
 	"dust:EventExplosionBatchRequest": "dust detonation; the explosion centers cross",
+	"weapon:EventExplosionRequest":    "disruptor pulse; center, ellipse radius, attack family and owner cross",
 
 	// D-3 table, drain fusion: the spawn request carries the header cell only.
 	"fuse:EventQuasarSpawnRequest": "drain fusion; the quasar header cell crosses",
@@ -44,14 +45,26 @@ var crossingPushes = map[string]string{
 
 	// D-3 table, gold: the typed member and its typist cross.
 	"typing:EventCompositeMemberDestroyed": "gold member typed; header, member and typist cross",
+	"nugget:EventCursorMoveRequest":        "a personal nugget jump moves the shared cursor",
 
 	// Crossings the D-3 table does not name. Each is a player mechanic whose
 	// shared outcome is determined by the artifact it pushes, so each needs a
 	// wire path in Phase 7 exactly as the rows above do.
-	"decay:EventNuggetDestroyed":    "a decay wave reaching a shared nugget; the nugget identity crosses",
-	"drain:EventNuggetDestroyed":    "a drain consuming a shared nugget; the nugget identity crosses",
 	"drain:EventCombatHealRequest":  "a dying drain donating its hit points; target and amount cross",
+	"drain:EventDrainDefeated":      "one personal drain death advances shared progression",
+	"fuse:EventDrainDefeated":       "each fused personal drain advances shared progression",
 	"typing:EventCursorMoveRequest": "the post-typing advance moves the shared cursor",
+	"energy:EventCursorDefeatState": "the owner's combined energy/heat lifecycle state crosses",
+	"heat:EventCursorDefeatState":   "the owner's combined energy/heat lifecycle state crosses",
+
+	// A shared species reads only the locally owned shield and crosses the exact
+	// target/member set; periodic remote shield state never resolves shared combat.
+	"quasar:EventCombatAttackAreaCrossingRequest": "owner-resolved shield impact on a shared quasar",
+	"swarm:EventCombatAttackAreaCrossingRequest":  "owner-resolved shield impact on a shared swarm",
+	"storm:EventCombatAttackAreaCrossingRequest":  "owner-resolved shield impact on a shared storm",
+	"eye:EventCombatAttackAreaCrossingRequest":    "owner-resolved shield impact on a shared eye",
+	"pylon:EventCombatAttackAreaCrossingRequest":  "owner-resolved shield impact on a shared pylon",
+	"snake:EventCombatAttackAreaCrossingRequest":  "owner-resolved shield impact on a shared snake",
 }
 
 // systemPushes records, per event constant one system's file pushes, the World

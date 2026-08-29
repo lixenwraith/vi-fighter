@@ -36,6 +36,8 @@ type MetaSystem struct {
 	statKills           [component.SpeciesCount]*atomic.Int64
 	statKillsTotal      *atomic.Int64
 	statKillsUncredited *atomic.Int64
+	statAllDefeated     *atomic.Bool
+	defeated            [parameter.MaxPlayers]bool
 }
 
 // NewMetaSystem creates a new meta system
@@ -56,6 +58,7 @@ func NewMetaSystem(ctx *engine.GameContext) engine.System {
 	}
 	s.statKillsTotal = reg.Ints.Get("kills.total")
 	s.statKillsUncredited = reg.Ints.Get("kills.uncredited")
+	s.statAllDefeated = reg.Bools.Get("session.all_defeated")
 	s.Init()
 	return s
 }
@@ -68,6 +71,8 @@ func (s *MetaSystem) Init() {
 	s.statCameraY.Store(0)
 	s.statPlayerX.Reset()
 	s.statPlayerY.Reset()
+	s.defeated = [parameter.MaxPlayers]bool{}
+	s.statAllDefeated.Store(false)
 	s.resetKills()
 }
 
@@ -97,6 +102,10 @@ func (s *MetaSystem) EventTypes() []event.EventType {
 		event.EventGameSpeedRequest,
 		event.EventGameStepRequest,
 		event.EventSpeciesKilled, // TODO: move kill telemetry to combat, not a meta concept, all happens in world
+		event.EventDrainDefeated,
+		event.EventCursorDefeatState,
+		event.EventCursorSpawned,
+		event.EventCursorDespawned,
 		event.EventGameResetRequest,
 	}
 }
@@ -133,19 +142,21 @@ func (s *MetaSystem) HandleEvent(ev event.GameEvent) {
 		}
 
 	case event.EventDebugFlowToggle:
+		dbg := &s.ctx.NavigationDebug
 		if payload, ok := ev.Payload.(*event.DebugFlowGroupPayload); ok {
-			DebugFlowGroupID = payload.GroupID
-			DebugShowFlow = true
+			dbg.GroupID = payload.GroupID
+			dbg.ShowFlow = true
 		} else {
-			DebugShowFlow = !DebugShowFlow
+			dbg.ShowFlow = !dbg.ShowFlow
 		}
 
 	case event.EventDebugGraphToggle:
+		dbg := &s.ctx.NavigationDebug
 		if payload, ok := ev.Payload.(*event.DebugFlowGroupPayload); ok {
-			DebugFlowGroupID = payload.GroupID
-			DebugShowCompositeNav = true
+			dbg.GroupID = payload.GroupID
+			dbg.ShowComposite = true
 		} else {
-			DebugShowCompositeNav = !DebugShowCompositeNav
+			dbg.ShowComposite = !dbg.ShowComposite
 		}
 
 	case event.EventMetaDebugRequest:
@@ -174,7 +185,51 @@ func (s *MetaSystem) HandleEvent(ev event.GameEvent) {
 		if p, ok := ev.Payload.(*event.SpeciesKilledPayload); ok {
 			s.recordKill(p)
 		}
+
+	case event.EventDrainDefeated:
+		s.statKills[component.SpeciesDrain].Add(1)
+		s.statKillsTotal.Add(1)
+
+	case event.EventCursorDefeatState:
+		if p, ok := ev.Payload.(*event.CursorDefeatStatePayload); ok {
+			s.setCursorDefeated(p.Entity, p.Defeated)
+		}
+
+	case event.EventCursorSpawned:
+		if p, ok := ev.Payload.(*event.CursorSpawnedPayload); ok && int(p.Slot) < len(s.defeated) {
+			s.defeated[p.Slot] = false
+			s.publishAllDefeated()
+		}
+
+	case event.EventCursorDespawned:
+		if p, ok := ev.Payload.(*event.CursorDespawnedPayload); ok && int(p.Slot) < len(s.defeated) {
+			s.defeated[p.Slot] = false
+			s.publishAllDefeated()
+		}
 	}
+}
+
+// setCursorDefeated applies an owner-authored lifecycle artifact to one roster slot.
+func (s *MetaSystem) setCursorDefeated(entity core.Entity, defeated bool) {
+	slot, ok := s.world.CursorSlot(entity)
+	if !ok || s.world.Resources.Player.Slot(slot) != entity {
+		return
+	}
+	s.defeated[slot] = defeated
+	s.publishAllDefeated()
+}
+
+// publishAllDefeated folds the per-owner latch into one shared FSM guard.
+func (s *MetaSystem) publishAllDefeated() {
+	roster := s.world.Resources.Player
+	all := roster.Count() > 0
+	for i := range parameter.MaxPlayers {
+		if roster.Slot(uint8(i)) != 0 && !s.defeated[i] {
+			all = false
+			break
+		}
+	}
+	s.statAllDefeated.Store(all)
 }
 
 // Update publishes context and player telemetry; every read is world state
@@ -205,6 +260,9 @@ func (s *MetaSystem) Update() {
 func (s *MetaSystem) recordKill(p *event.SpeciesKilledPayload) {
 	if p.Species <= component.SpeciesNone || p.Species >= component.SpeciesCount {
 		return
+	}
+	if p.Species == component.SpeciesDrain {
+		return // Shared progression consumes EventDrainDefeated; local rewards consume this event.
 	}
 	if p.Species == component.SpeciesTower && p.KillerEntity == 0 {
 		return
@@ -248,7 +306,7 @@ func (s *MetaSystem) handleGameReset(purge bool) {
 	// 4. Journal run advances with the tick counter it re-bases; both are world-lock state,
 	// so no producer can observe one without the other
 	run := s.world.Resources.Event.Queue.NextRun()
-	vlog.SetRun(run)
+	s.ctx.Correlation.SetRun(run)
 
 	// 5. Config reset (map dimensions to viewport)
 	config := s.ctx.World.Resources.Config
@@ -375,7 +433,7 @@ func debugCard(v status.GroupView, pinned bool) core.OverlayCard {
 
 // handleHelpRequest projects the help topics against the active key bindings
 func (s *MetaSystem) handleHelpRequest() {
-	topics := help.Topics(help.KeyTable())
+	topics := help.Topics(s.ctx.KeyTable)
 
 	content := &core.OverlayContent{
 		Title:  "HELP",

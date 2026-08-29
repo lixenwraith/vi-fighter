@@ -10,15 +10,16 @@ import (
 	"testing"
 )
 
-// allowedDomainAccess exempts one system's access to a store of the other
-// domain, keyed "system:Store". D-12 claimed geometry is the only legitimate
-// reason: the outcome is a function of the cell set alone, so it is identical
-// on every instance.
+// allowedDomainAccess exempts one system's D-12 access to the other domain,
+// keyed "system:Store". Shared consequences remain cell-derived; player victims
+// and their lifecycle notifications remain local.
 var allowedDomainAccess = map[string]string{
-	"wall:Decay":   "D-12 push-out classifies any occupant; read-only mask lookup",
-	"wall:Blossom": "D-12 push-out classifies any occupant; read-only mask lookup",
-	"drain:Wall":   "GetPtr reads BlockMask for spawn denial; the wall is never written",
-	"death:Wall":   "GetPtr reads BlockMask while resolving a shared wall death",
+	"wall:Decay":    "D-12 push-out classifies any occupant; read-only mask lookup",
+	"wall:Blossom":  "D-12 push-out classifies any occupant; read-only mask lookup",
+	"drain:Wall":    "GetPtr reads BlockMask for spawn denial; the wall is never written",
+	"death:Wall":    "GetPtr reads BlockMask while resolving a shared wall death",
+	"quasar:Nugget": "D-12 footprint sweep classifies a personal victim for local lifecycle notification",
+	"storm:Nugget":  "D-12 footprint sweep classifies a personal victim for local lifecycle notification",
 }
 
 // ownerAuthoredStores are the cursor-exclusive components exactly one instance
@@ -95,6 +96,9 @@ func TestSystemDomainProfiles(t *testing.T) {
 				}
 			}
 			for _, store := range sortedStores(e.reads) {
+				if ownerAuthoredStores[store] {
+					t.Errorf("%s: declared shared but reads the owner-authored %s store (D-13)", e.file, store)
+				}
 				if storeDomains[store] == "player" && !exempt(e.name, store) {
 					t.Errorf("%s: declared shared but reads the player-only %s store (D-1)", e.file, store)
 				}
@@ -404,6 +408,34 @@ func TestHelperFilesArePinned(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("unattributed file set changed; update helperFiles to:\n\t%#v", got)
+	}
+}
+
+// TestSharedCursorOverlapOutcomesStayOwnerResolved pins every shared species
+// overlap to a local-ownership guard and a shield-impact crossing.
+func TestSharedCursorOverlapOutcomesStayOwnerResolved(t *testing.T) {
+	want := map[string][3]int{
+		"quasar.go": {1, 1, 1},
+		"swarm.go":  {1, 1, 1},
+		"storm.go":  {1, 1, 1},
+		"eye.go":    {1, 1, 1},
+		"pylon.go":  {1, 1, 1},
+		"snake.go":  {2, 2, 1},
+	}
+	for file, counts := range want {
+		body, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := string(body)
+		got := [3]int{
+			strings.Count(source, "CheckCursorOverlaps("),
+			strings.Count(source, "SimulatesLocally("),
+			strings.Count(source, "PushCrossing(event.EventCombatAttackAreaCrossingRequest"),
+		}
+		if got != counts {
+			t.Errorf("%s overlap/owner/crossing counts = %v, want %v", file, got, counts)
+		}
 	}
 }
 

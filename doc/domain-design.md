@@ -1,7 +1,8 @@
 # Multi-instance domain model — vi-fighter
 
-Status: Phases 4 through 7 landed, verification included. Rules D-1..D-15 are
-implemented unless marked. Supersedes every earlier design note.
+Status: Phases 4 through 7 and the Phase 8 transport checkpoint landed,
+verification included. Rules D-1..D-15 are implemented unless marked.
+Supersedes every earlier design note.
 
 ## 1. Domains
 
@@ -39,17 +40,26 @@ smallest artifact that determines the shared outcome crosses as a Bus event:
 | effect | crossing artifact |
 |---|---|
 | direct hit (rod, cleaner, bullet) | one combat event per shared target |
-| area effect (missile impact, dust detonation) | one explosion request: centers, radius, duration, attack family, owner cursor |
+| area effect (missile impact, dust detonation, disruptor pulse) | one explosion request: centers, radius, duration, attack family, owner cursor |
 | drain fusion | one spawn request: header cell only |
 | gold member typed | one composite-member destruction: header, member, typist cursor |
-| decay or drain reaching a shared nugget | one nugget destruction: the nugget identity |
 | a dying drain donating its hit points | one heal request: target and amount |
+| a personal drain death | one progression event with no entity payload |
 | the post-typing cursor advance | one cursor move request: the shared cursor and its cell |
+| a personal nugget jump | one cursor move request: the shared cursor and the personal nugget's cell |
+| a locally owned shield striking a shared species | one area hit: target, struck members and owner cursor |
+| a participant entering or leaving terminal heat/energy state | one cursor defeat-state event |
 
 The table is `crossingPushes` in `internal/system/event_class_test.go`, and the
 test fails on a player-profile system pushing a replicated event that is not in
-it. The last three rows were found that way: they are crossings the design did
-not name, and each needs a wire path in Phase 7 exactly as the first four do.
+it. Nugget destruction left the table in Phase 8 when nugget became personal;
+only its jump's shared cursor move crosses.
+
+The shared progression FSM consumes `EventDrainDefeated`, not the local drain's
+`EventSpeciesKilled`; otherwise one participant's personal population advances
+only its own copy of `kills.drain`. The global reset similarly consumes the
+crossed combined defeat predicate and resets only when every rostered cursor is
+defeated. It never reads the owner-authored `heat.current`/`energy.current` cells.
 
 Effects on player targets do not cross. The producer resolves its own domain
 *before* pushing the crossing event; the shared consumer resolves only shared
@@ -121,8 +131,8 @@ domain and carried through to `JournalRecord.Domain`, which the vlog sink
 writes and `internal/journal` parses. Registry classes: `Shared` (emitted and
 consumed shared, replicated), `Bus` (player-originated, affects shared,
 replicated), `Local` (never replicated), `Stamped` (class determined per-event
-from the domain tag). The registry table itself is Phase 6; today the class is
-documented, not declared.
+from the domain tag). The class is declared in `type.go` and generated into the
+registry table; no runtime inference remains.
 
 Two facts constrain how the table can be built:
 
@@ -150,15 +160,15 @@ record", which is what the journal filter needs. `event.OnWire` answers "must a
 peer receive it", and it is strictly narrower: a `Shared` event is re-derived
 identically on every instance, so sending it applies it twice.
 
-The wire set is not `Bus` either. **Every Bus type has producers of both kinds**:
-`EventNuggetDestroyed` from a player decay wave and from a shared quasar,
+The wire set is not `Bus` either. **Many Bus types have producers of both kinds**:
 `EventCompositeMemberDestroyed` from typing and from pylon, tower, storm and
 snake, `EventExplosionRequest` from a missile and from an eye,
 `EventSwarmSpawnRequest` from the fuse and from a storm. A shared producer's copy
 is re-derived everywhere; only the player-domain one crosses. So the tag decides
 here too: `World.PushCrossing` stamps the D-3 artifact `DomainPlayer`, and
-`OnWire` requires it. `TestCrossingPushesAreLive` fails a `crossingPushes` entry
-that does not use it.
+`OnWire` requires it. Crossing-only Bus types such as `EventDrainDefeated` use
+the same explicit stamp; class alone never opts an event onto the wire.
+`TestCrossingPushesAreLive` fails a `crossingPushes` entry that does not use it.
 
 For `Stamped` the tag means the *target's* domain instead, so the same rule reads
 inverted: `stampedCrossings` names the one Stamped type a player-domain producer
@@ -215,9 +225,11 @@ it are excluded by `denySharedPrefix` in `internal/app/snapshot.go`.
 
 The static check keys on store name, so it covers only the cursor-exclusive
 half: `ownerAuthoredStores` in `internal/system/domain_test.go` lists Energy,
-Heat, Boost, Weapon, CursorView, Ping and Pulse. `Shield` and `Combat` are
-excluded deliberately — they also carry quasar, loot and species state, which
-is re-derived, and the store name alone cannot separate the two populations.
+Heat, Boost, Weapon, CursorView, Ping and Pulse. A shared-profile system may
+neither write nor read one of those stores; the read check would have caught the
+old shared nugget claim. `Shield` and `Combat` are excluded deliberately — they
+also carry quasar, loot and species state, which is re-derived, and the store
+name alone cannot separate the two populations.
 
 The set is closed against the code: a live cursor carries exactly Cursor,
 Protection, Energy, Heat, Shield, Boost, Weapon, Ping, CursorView, Combat and
@@ -228,10 +240,17 @@ list.
 The transport is `CursorStatePayload`, written by `NetworkSystem` and by nothing
 else, and only onto a cursor `SimulatesLocally` rejects. Shield and Combat travel
 as their cursor fields alone. `CursorViewComponent.Orbs` does not travel: it names
-player-domain entities (D-4). Two members are load-bearing rather than
-presentational — `ShieldComponent.Active/InvRxSq/InvRySq` and
-`HeatComponent.EmberActive` — because `NuggetSystem.collectionCursor` resolves a
-shared outcome through them. See §7: that read is this rule's one live violation.
+player-domain entities (D-4). Shield geometry and ember state reproduce the
+remote cursor's presentation and owner-local interactions; no shared outcome
+reads the periodic snapshot.
+
+Shield/species collision used to contradict that last sentence: quasar, swarm,
+storm, eye, pylon and snake all re-derived shared knockback from whichever shield
+snapshot they held. Each now admits only `SimulatesLocally` cursors and crosses
+`EventCombatAttackAreaCrossingRequest` with the exact shared target/member set.
+`TestSharedCursorOverlapOutcomesStayOwnerResolved` pins every overlap site to the
+ownership guard and crossing; `TestSharedSpeciesCrossesOnlyOwnedShieldImpact`
+proves a remote shield cannot produce a second impact.
 
 **D-14 Map bounds authority.** `MapWidth`, `MapHeight` and `CropOnResize` are
 shared simulation state with two writers:
@@ -301,9 +320,9 @@ Telemetry: `spatial.player_budget_rejects`, `spatial.indexed_shared`.
 
 | Domain | Entities |
 |---|---|
-| **Shared** | cursor, quasar, swarm, storm, snake, eye, pylon, tower, gateway, wall, nugget, gold, marker, explosion centers, FSM, time |
-| **Player** | glyph, dust, drain, decay, blossom, bullet, missile, orb, lightning, flash, fadeout, splash, motion marker, loot |
-| **Stamped** | cleaner (nugget-spawned shared, weapon-spawned player), materialize (shared when it gates a shared spawn, player for drain), spirit (shared unless the requester is player-domain, which today is always the fuse) |
+| **Shared** | cursor, quasar, swarm, storm, snake, eye, pylon, tower, gateway, wall, gold, marker, explosion centers, FSM, time |
+| **Player** | glyph, nugget, dust, drain, decay, blossom, bullet, missile, orb, lightning, flash, fadeout, splash, motion marker, loot |
+| **Stamped** | cleaner (request-stamped; current nugget, weapon and command producers are player), materialize (shared when it gates a shared spawn, player for drain), spirit (shared unless the requester is player-domain, which today is always the fuse) |
 
 Cursor components split three ways: shared-and-replicated (position),
 owner-authored (energy, heat, boost, shield, weapon, combat — D-13), and pure
@@ -323,18 +342,19 @@ splash, typing, drain — guard by `e.Domain() != core.DomainPlayer`. One invari
 stated at the loop, replacing three accidental mechanisms (protection masks,
 component absence, iteration order) that happened to hold.
 
-**Contested objectives.** Nugget and gold are shared entities that any
-participant may claim, and the claim itself is a shared outcome every instance
-agrees on: `NuggetSystem.collectionCursor` and `GoldSystem.handleJumpRequest`
-resolve over the whole roster and their sequence state is shared. Only the
-*reward* is owner-authored (D-13). Credit is a deterministic function of the
-shared event stream: `GoldSystem` tallies `EventCompositeMemberDestroyed` per
-roster slot and `GoldCompletionPayload.Entity` names the cursor that typed the
-most members, ties breaking to the lowest slot, zero on timeout or destruction.
-This is the deliberate opposite of loot, which is rolled and owned per
-participant (D-6) precisely because its drop table reads per-cursor inventory.
-A mechanic is contested when the outcome is a function of shared state alone;
-personal when it reads owner-authored state.
+**Contested objectives.** Gold is shared and any participant may claim it. The
+claim is a deterministic function of the shared event stream: `GoldSystem`
+tallies `EventCompositeMemberDestroyed` per roster slot and
+`GoldCompletionPayload.Entity` names the cursor that typed the most members,
+ties breaking to the lowest slot, zero on timeout or destruction. Only the
+reward is owner-authored (D-13).
+
+Nugget is deliberately personal and uncontested. Each instance owns its player-
+domain spawn, collection area, destruction and reward; a remote cursor cannot
+claim it. A nugget jump crosses only the resulting shared cursor move. This puts
+nugget beside loot, which is also rolled and owned per participant because its
+mechanic reads owner-authored state. A mechanic is contested when the outcome is
+a function of shared state alone; personal when it reads owner-authored state.
 
 **Glyph.** Content glyphs are player-domain — every instance derives the same
 corpus from the same seed, so a glyph is re-derived rather than replicated, and
@@ -372,11 +392,54 @@ and the context state it writes is not world state.
 `network` carries a `dual` profile: it replays a peer's crossings in the domain
 their producer stamped (D-7) and is the sole writer of a remote cursor's
 owner-authored set (D-13). It runs first — `parameter.PriorityNetwork` — but its
-transport work is not in `Update`: inbound opens the tick, before the settle, and
-outbound closes it, after everything the tick produced has settled. Both are
-driven by `ClockScheduler` through the queue's `event.WireSink`, so a peer
-receives one tick's artifacts as one tick's worth. `unregisteredSystems` in
-`internal/system/domain_test.go` is now empty.
+transport work is not in `Update`. `event.WireSink.Cross` ends production by
+encoding and withholding each local artifact. `Flush` closes the tick's epoch and
+sends it asynchronously, including an empty marker. `Receive` opens the next tick
+by applying local and peer artifacts whose fixed playout deadline has arrived,
+then `settleLocked("wire")` completes that dedicated between-tick settle group
+before `BeginTick`. Existing pre/post settle groups are neither merged nor split,
+so replay keeps their exact granularity.
+
+The default delay is three 50ms ticks. It is session metadata rather than a
+round-trip gate: simulation never waits for a peer, and a deployment can negotiate
+a larger lead for a higher-latency path. Artifacts sort by apply tick, participant
+ID and per-source sequence, the shape required beyond two participants. A crossing
+produced by the wire settle belongs to the production epoch about to run and gets
+one complete delay of its own; it never recurses into the apply pass.
+
+With no live peer `Cross` declines ownership, `Receive` returns zero and the
+scheduler creates no wire settle group. The original queue/journal/publication
+path is therefore unchanged. `network.barrier_{deferred,applied_local,
+applied_peer,late,ran_without_peer,peer_lag_ticks,peer_artifacts}` and
+`network.barrier_peer_applied` expose the barrier state. `unregisteredSystems` in
+`internal/system/domain_test.go` is empty.
+
+The real stream endpoint is `network.SocketPort`. Every message has a fixed
+12-byte header whose final field is payload length; `Decode` uses `io.ReadFull`
+for both header and payload, and `Encode` completes short writes. Transport
+goroutines append only `network.Inbound` values to the port buffer. `NetworkSystem`
+drains that buffer under the world lock, preserving the poll boundary.
+Idle peers exchange framed heartbeats; read and write deadlines close a silent
+stream without blocking a tick. The resulting disconnect notification is drained
+through the same path and removes only cursors owned by that participant.
+
+The startup handshake sends the existing `JoinAnchor` inside `SessionOffer`, then
+the host assigns participant IDs and roster slots. `App.JoinSession` still calls
+`App.Join`, so schema, tick interval, seed, session, config, corpus and D-14 latch
+mismatches return the existing join error. A rejected connection never enters the
+peer manager. Canonical participant IDs, not connection-local accept order, key
+the barrier sort and disconnect roster cleanup. The tick-zero start/ready gate is
+startup coordination only; no per-tick round trip was added.
+
+The wire keeps journal TOML payloads inside a JSON epoch envelope. The measured
+complete stream frames, including the 12-byte header, are 44 bytes for an empty
+epoch, 567 bytes for four cursor moves, 1,771 bytes for six resolved three-member
+shield hits, and 703 bytes for one D-13 owner-state sync. At 20 ticks/s with the
+six-tick state cadence, that is about 3.2 KB/s idle, 13.7 KB/s at four crossings
+per tick, or 37.8 KB/s at the deliberately busy shield rate, per direction and
+owned cursor. A denser payload codec does not justify a second registry/schema
+path at these rates. `TestWireEncodingBudget` pins the representative budgets;
+`TestFrameRoundTripSurvivesShortStreamIO` pins framing.
 
 ## 6. Telemetry and snapshots
 
@@ -407,7 +470,10 @@ not the name. `denySharedKey` drops a single key from an otherwise comparable
 group: `engine.apm` and `engine.music_apm` beside the tick counters,
 `nav.entities`, and `content.served`/`content.rejected` beside the corpus
 fingerprint. A `.buf_*_hwm` suffix drops scratch high-water marks, which
-`newBufferTelemetry` names for every system that publishes one. `allowSharedKey`
+`newBufferTelemetry` names for every system that publishes one. A
+`.protected_player_rejects` suffix drops the player-victim half of otherwise
+shared species protection telemetry; the unsuffixed counter contains only shared
+victims. `allowSharedKey`
 re-admits `spatial.indexed_shared`, which its group prefix would otherwise deny.
 `denySharedField` drops `created_local`/`destroyed_local` from the otherwise
 shared `world` record.
@@ -417,6 +483,13 @@ player-domain simulations. A real second participant drives its own cursor, so
 every mixed-domain counter moves independently; `combat.` is the loss worth
 naming, since it resolves targets in both domains from one set of counters and
 would return to the comparison if those were split per domain.
+
+The Phase 8 observer soak found three code/document disagreements. Personal drain
+deaths incremented `kills.drain` only where their population existed;
+`EventCombatHealRequest` was pushed with `PushCrossing` but declared `Shared`, so
+`OnWire` correctly rejected it; and the monitor reset read slot-zero owner state
+directly. They now cross `EventDrainDefeated`, declare the heal `Bus`, and fold
+per-owner `EventCursorDefeatState` artifacts into `session.all_defeated`.
 
 `SnapshotContext` emits five records: `context`, `world` and `player` are
 emitted into the shared view, `view` and `session` are dropped from it. The
@@ -429,31 +502,40 @@ whose `CombatComponent` is owner-authored (D-13).
 
 ## 7. Known gaps
 
-- **`NuggetSystem.collectionCursor` reads owner-authored state to decide a shared
-  outcome.** Which cursor claims a shared nugget is resolved by each rostered
-  cursor's `HeatComponent.EmberActive` and `ShieldComponent.Active`/`InvRxSq`/
-  `InvRySq`. Those are D-13 values that arrive on a periodic sync, so two
-  participants can disagree on whether a nugget was collected — a shared entity
-  population divergence. §4 already states the rule this breaks: "a mechanic is
-  contested when the outcome is a function of shared state alone". **No sync
-  cadence closes it**, because the transport is a pipeline: the peer is applying
-  a value the owner has already moved past. The two ways out are a shared
-  collection rule (co-location and a shared radius, no owner-authored read) or
-  demoting collection to a personal mechanic resolved per instance. This is a
-  gameplay decision, so it is recorded rather than taken. Meanwhile the
-  two-participant test disables `nugget` and says why.
-- **Per-tick parity between two live participants needs a barrier.** A crossing
-  pushed during a settle applies locally in that settle but reaches the peer in
-  the next tick's opening, so a damage-immunity window can close on one side and
-  not the other. `TestObserverSharedStateTracksTheLiveParticipant` holds to 200
-  steps with one live participant and one observer and diverges beyond that on a
-  species kill. Closing it is the produce-exchange-apply barrier of Phase 8, not
-  a transport defect.
+- **Resolved in Phase 8: nugget is personal and uncontested.** `NuggetComponent`
+  and `NuggetSystem` are player-domain, the nugget event family is `Local`, and
+  `collectionCursor` reads only the local binding. Quasar and storm may still
+  remove a personal nugget through their D-12 player victim batch, but the
+  lifecycle notification remains local. `TestPersonalNuggetUsesPlayerDomainAndLocalCursor`
+  and the profile read check in `TestSystemDomainProfiles` enforce the decision.
+- **Resolved in Phase 8: the fixed-delay crossing barrier.** Before it, a crossing
+  applied locally in its producing settle and remotely at the next tick opening —
+  a one-tick, 50ms window at the default cadence. The Phase 7 observer held for
+  200 scripted steps before a species interaction exposed it. Both copies now
+  apply at the same future between-tick boundary; the observer soak holds for
+  1,200 steps in `TestObserverSharedStateTracksTheLiveParticipant`.
+- **Resolved in Phase 8: the TCP poll endpoint.** The same two-live proof holds
+  for 1,200 steps over `127.0.0.1` in
+  `TestTwoLiveParticipantsStayInLockstepOverTCP`, including the anchor handshake,
+  coordinator roster, stream framing and clean remote-cursor removal on disconnect.
+  The host transport remains running with its local cursor.
+- **Operator startup is not in this checkpoint.** `SocketPort`, `ConfigForJoin`,
+  `HostSession` and `JoinSession` are the application seams, but `cmd/vif` has no
+  `-host`/`-join` flags yet. The current session is startup-only, trusted and
+  plaintext: no mid-run snapshot, reconnect, authentication, lag compensation or
+  TLS configuration surface. The roster and participant vectors are not shaped
+  around two peers, but this proof assigns exactly two.
 - **`EventLevelSetup` and FSM region ops are `Shared` but operator-injectable.**
   Both are replicated only because every instance runs the same map script; one
   injected into a single participant rewrites shared state its peers never see.
   `ScriptOptions.MapSetups` holds the first fixed for a parity run, matching what
   `Resizes` already does; the FSM op is held by `Regions`.
+- **Ex commands and overlays are operator-injectable, not participant input.**
+  The two-live criterion disables both: commands include direct scheduler and
+  system mutations that are not sent to a peer, while an overlay advances only
+  its App's paused clock. The same harness disables internal random ticks and
+  advances both clocks once per step. These actions remain valid in replay and
+  single-instance soaks; they are outside the D-10 wire set by design.
 - `event.EmitDeath` writes the queue directly, bypassing `PushEvent`, so
   `WithDomain` does not reach death records. Batches are already domain-pure,
   which is what determinism needs. Landed in Phase 6 as a domain parameter; the
@@ -467,5 +549,6 @@ whose `CombatComponent` is owner-authored (D-13).
 - A recording wider than the terminal is clipped by the render buffer. The pan
   offset in `play.go` is the seam a windowed composite replaces. Deferred; it
   is a presentation problem with no shared-state component.
-- Journal schema is 8: 7 made `Domain` meaningful, 8 added the D-14 map latch to
-  the anchor. Records are unchanged between the two.
+- Journal schema is 9: 7 made `Domain` meaningful, 8 added the D-14 map latch to
+  the anchor, and 9 moved the nugget event family out of the replicated record
+  set after the mechanic became personal.

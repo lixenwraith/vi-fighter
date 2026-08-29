@@ -324,6 +324,7 @@ func (s *DrainSystem) processDrainStates() {
 				X:            killX,
 				Y:            killY,
 			}, core.DomainPlayer)
+			s.world.PushCrossing(event.EventDrainDefeated, nil)
 			continue
 		}
 
@@ -876,6 +877,7 @@ func (s *DrainSystem) handleDrainInteractions() {
 				X:       killX,
 				Y:       killY,
 			}, core.DomainPlayer)
+			s.world.PushCrossing(event.EventDrainDefeated, nil)
 			s.statSuicides.Add(1)
 		}
 	}
@@ -920,6 +922,7 @@ func (s *DrainSystem) handleDrainDrainCollisions() {
 			X:            a.pos.X,
 			Y:            a.pos.Y,
 		}, core.DomainPlayer)
+		s.world.PushCrossing(event.EventDrainDefeated, nil)
 		s.statCollisions.Add(1)
 	}
 }
@@ -1133,7 +1136,7 @@ func (s *DrainSystem) handleCollisionAtPosition(drain *drainCacheEntry, entity c
 
 	// Check if it's a nugget, notify destruction
 	if s.world.Components.Nugget.HasEntity(entity) {
-		s.world.PushCrossing(event.EventNuggetDestroyed, &event.NuggetDestroyedPayload{
+		s.world.PushLocal(event.EventNuggetDestroyed, &event.NuggetDestroyedPayload{
 			Entity: entity,
 		})
 	}

@@ -117,10 +117,11 @@ const (
 	settleSourceReset
 	settleSourceInput
 	settleSourceManual
+	settleSourceWire
 	settleSourceCount
 )
 
-var settleSourceNames = [settleSourceCount]string{"pre", "post", "loop", "reset", "input", "settle"}
+var settleSourceNames = [settleSourceCount]string{"pre", "post", "loop", "reset", "input", "settle", "wire"}
 
 // NewClockScheduler creates a new clock scheduler with specified tick interval
 // Receives frameReady sync (receive) channel and returns game updateDone (send) and resetRequest (send) channels
@@ -379,7 +380,7 @@ func (cs *ClockScheduler) bindFSMTelemetry() {
 				"via", event.GetEventName(trigger))
 			return
 		}
-		status.TriggerFSM(region)
+		cs.world.Resources.Status.TriggerFSM(region)
 		if vlog.On("fsm", vlog.LevelInfo) {
 			vlog.Info("fsm", "msg", "transition",
 				"region", region,
@@ -612,7 +613,7 @@ func (cs *ClockScheduler) Reset() { cs.executeReset() }
 // breakHit applies a tripped request: flush the recorder window, report the
 // cause, and pause when asked
 func (cs *ClockScheduler) breakHit(bs *BreakState, cause string) {
-	status.Trigger(status.TrigBreak)
+	cs.world.Resources.Status.Trigger(status.TrigBreak)
 	vlog.Info("app", "msg", "breakpoint",
 		"on", bs.Label, "cause", cause, "scale", bs.Restore.String(), "pause", bs.Pause)
 
@@ -889,6 +890,8 @@ func (cs *ClockScheduler) recordSettlePass(src string) {
 		index = settleSourceInput
 	case "settle":
 		index = settleSourceManual
+	case "wire":
+		index = settleSourceWire
 	default:
 		return
 	}
@@ -1051,7 +1054,7 @@ func (cs *ClockScheduler) processTick() {
 	}
 
 	// Lock sampling is a per-tick decision, not a per-acquire probe
-	SetLockSampling(vlog.On("lock", vlog.LevelDebug) || status.RecorderActive())
+	cs.world.SetLockSampling(vlog.On("lock", vlog.LevelDebug) || cs.world.Resources.Status.RecorderActive())
 	SetDomainAudit(vlog.On("domain", vlog.LevelDebug))
 
 	var (
@@ -1072,10 +1075,16 @@ func (cs *ClockScheduler) processTick() {
 		}
 		tickTime = cs.ctl.Now()
 
-		// Stamp under the lock: a producer must not observe the new tick before
-		// the tick body it belongs to has started
+		// The barrier applies against the completed tick's stamp. Its settle group
+		// therefore replays between ticks, before the next BeginTick resets Boundary.
 		tick := cs.world.Resources.Game.State.GetGameTicks() + 1
-		vlog.SetTick(tick)
+		if cs.world.Resources.Event.Queue.ReceiveWire(tick) > 0 {
+			cs.settleLocked("wire")
+		}
+
+		// Stamp under the lock: a producer must not observe the new tick before
+		// the tick body it belongs to has started.
+		cs.world.Resources.Status.Correlation().SetTick(tick)
 		cs.world.Resources.Event.Queue.BeginTick(tick)
 
 		// 1. Sync Time
@@ -1088,12 +1097,9 @@ func (cs *ClockScheduler) processTick() {
 		// 2. Update game elapsed time status
 		cs.statGameElapsedMs.Store(tickTime.Sub(cs.gameStartTime).Milliseconds())
 
-		// 3. Initial Settling: Resolve everything accumulated during game tick,
-		//    a peer's artifacts included — inbound transport opens the tick so a
-		//    crossing lands in the tick that drained it, not the one after.
+		// 3. Initial Settling: Resolve everything accumulated during game tick.
 
 		// Ensures FSM and Systems start with a consistent, settled world
-		cs.world.Resources.Event.Queue.ReceiveWire()
 		cs.dispatchAndProcessEvents("pre")
 
 		// 4. FSM Update: Advance state machine (may emit new events via Actions)
@@ -1149,7 +1155,7 @@ func (cs *ClockScheduler) processTick() {
 		}
 		// Outbound transport closes the tick: everything this tick produced has
 		// settled, so a peer receives one tick's artifacts as one tick's worth
-		cs.world.Resources.Event.Queue.FlushWire()
+		cs.world.Resources.Event.Queue.FlushWire(ticks)
 
 		cfg := cs.world.Resources.Config
 		screenW, screenH = ScreenSize(cfg)
@@ -1166,7 +1172,7 @@ func (cs *ClockScheduler) processTick() {
 		vlog.Warn("event", "msg", "queue overflow",
 			"dropped", dropped,
 			"delta", droppedDelta)
-		status.Trigger(status.TrigDrop)
+		cs.world.Resources.Status.Trigger(status.TrigDrop)
 	}
 
 	// Status snapshot: world lock released and every stat above committed,
