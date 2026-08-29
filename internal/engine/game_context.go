@@ -491,6 +491,12 @@ func (ctx *GameContext) PushEvent(eventType event.EventType, payload any) {
 	ctx.World.PushEvent(eventType, payload)
 }
 
+// PushLocal stamps the player domain, for producers whose effect is this
+// instance's alone: operator commands and per-instance input (D-10)
+func (ctx *GameContext) PushLocal(eventType event.EventType, payload any) {
+	ctx.World.PushLocal(eventType, payload)
+}
+
 // PushEventFull emits with explicit origin and domain tags, for replay and
 // transport, which restore both from a record rather than from the ambient tags
 func (ctx *GameContext) PushEventFull(eventType event.EventType, payload any, origin event.Origin, domain core.Domain) {
