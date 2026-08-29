@@ -339,11 +339,11 @@ declares for itself:
 The table uses runtime `Name()` values, which the manifest keys now match;
 `TestActiveSystemsMatchRuntimeNames` keeps the two together, so configuration
 validation, the `:system` command and the manifest all name a system the same
-way. `MetaSystem` is event-only: declared in `manifest.ContextSystems` and added
-directly by the app, since it takes a `GameContext` rather than a `World`.
+way. `MetaSystem` is event-only and added directly by the app, declaring its
+profile in `manifest.ContextSystems`.
 
-Each entry declares a domain profile and its dependencies as `SystemDef` data
-in the manifest; see [the domain model](domain-design.md).
+Each entry declares a domain profile and its dependencies in
+`internal/manifest/definition.go`; see [the domain model](domain-design.md).
 
 ## 12. Balance and ownership map
 
