@@ -108,7 +108,7 @@ const (
 
 	// --- Meta ---
 
-	// EventGameResetRequest (GameResetPayload) [shared] signals a request to reset the game state
+	// EventGameResetRequest (GameResetPayload) [bus] resets the session; shared producers re-derive it, operator producers cross it
 	EventGameResetRequest
 	// EventMetaDebugRequest [local] signals a request to show debug overlay
 	EventMetaDebugRequest
@@ -265,10 +265,14 @@ const (
 
 	// --- Explosion ---
 
-	// EventExplosionRequest (ExplosionRequestPayload) [bus] triggers explosion effect at location
+	// EventExplosionRequest (ExplosionRequestPayload) [bus] resolves shared combat geometry at one center
 	EventExplosionRequest
-	// EventExplosionBatchRequest (ExplosionBatchRequestPayload) [bus] triggers one explosion made of several centers
+	// EventExplosionBatchRequest (ExplosionBatchRequestPayload) [bus] resolves shared combat geometry at several centers
 	EventExplosionBatchRequest
+	// EventExplosionVisualRequest (ExplosionVisualRequestPayload) [local] presents one explosion center for its producer
+	EventExplosionVisualRequest
+	// EventExplosionVisualBatchRequest (ExplosionVisualBatchRequestPayload) [local] presents several explosion centers for its producer
+	EventExplosionVisualBatchRequest
 
 	// --- Dust ---
 
@@ -324,6 +328,8 @@ const (
 	EventCursorSpawned
 	// EventCursorSpawnFailed [shared] signals no roster slot or no free cell was available
 	EventCursorSpawnFailed
+	// EventCursorArmRequest (CursorArmRequestPayload) [local] restores the locally owned cursor's configured starting resources
+	EventCursorArmRequest
 	// EventCursorDespawnRequest (CursorDespawnRequestPayload) [shared] asks CursorSystem to destroy cursors
 	EventCursorDespawnRequest
 	// EventCursorDespawned (CursorDespawnedPayload) [shared] announces a destroyed cursor
@@ -345,12 +351,12 @@ const (
 	EventSpeciesCreated
 	// EventSpeciesKilled (SpeciesKilledPayload) [stamped] announces a terminated species instance
 	EventSpeciesKilled
-	// EventDrainDefeated [bus] advances shared progression for one personal drain death
+	// EventDrainDefeated (DrainDefeatedPayload) [bus] advances progression and names the causal cursor domain
 	EventDrainDefeated
 
 	// --- Fuse ---
 
-	// EventFuseQuasarRequest [local] signals drains should fuse into quasar
+	// EventFuseQuasarRequest (FuseQuasarRequestPayload) [local] asks the elected cursor's drains to fuse into quasar
 	EventFuseQuasarRequest
 	// EventFuseSwarmRequest (FuseSwarmRequestPayload) [local] signals two enraged drains should fuse into swarm
 	EventFuseSwarmRequest
