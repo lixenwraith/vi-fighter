@@ -539,7 +539,17 @@ resolve between themselves — nothing re-derives a missing artifact — so the
 session publishes `network.diverged`, logs at error, and the indicator turns from
 amber `DESYNC` to red `DIVERGED`. `network.sync_part` and `network.sync_tick` name
 the first differing category and the tick it was first seen on, so the diagnosis
-survives into `:d` and the journal. Agreement clears both degrees.
+survives into `:d` and the journal.
+
+A category is not a diagnosis. "The status surface differs" leaves a hundred
+records to search, and one host's own log cannot narrow it — both instances hold
+half the evidence. So once a sample has disagreed, and only then, the digest
+carries a hash per snapshot record alongside the category hashes, and the report
+names the records that moved in `network.sync_records`. It is a diagnostic rather
+than a probe: a healthy session sends none of it, which
+`TestSharedDigestCarriesDetailOnlyOnRequest` pins, and the first disagreeing sample
+turns it on early enough that the second one — the one that reports — already has
+it from both sides. Agreement clears every degree.
 
 **Membership.** A roster change is shared state, so it travels as an artifact
 rather than as a local reaction to a link event. A disconnect is observed only by
