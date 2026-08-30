@@ -340,11 +340,15 @@ of different ages from identical inputs.
 recomputes only once `MinTicksBetweenCompute` has elapsed, and a recompute resets
 the counter. So every producer of a dirty mark must be shared. They are —
 `EventCursorMoved`, `EventCursorDespawned`, the wall lifecycle and
-`EventLevelSetup` — with one exception that took a long run to surface: a resize
-reconciled every cursor even when the map had not moved, and `CursorSystem.move`
-announces unconditionally. One participant's terminal therefore advanced its own
-flow-field phase, and shared species steered along fields of different ages. It
-begins in kinetics, not in position, so nothing looks wrong for a long time.
+`EventLevelSetup` — and two local view changes were announcing the first of them.
+A resize reconciled every cursor even when the map had not moved, and
+`CursorSystem.move` announces unconditionally. And `setLocal`, which binds *this*
+participant's slot, re-announced the cursor's position so the camera would
+re-anchor — so every participant but slot zero advanced its own flow-field phase
+at session start, which is why the resulting divergence looked intermittent and
+unrelated to anything a player did. Both now re-anchor the view directly and
+announce nothing. The symptom in both cases begins in kinetics, not in position,
+so nothing looks wrong for a long time.
 
 `nav.recomputes` and `nav.roi_cells` are compared for exactly this reason. They
 count recomputes, so they are the direct statement that two instances' throttles
@@ -747,7 +751,7 @@ fails the build when the code stops matching the declaration.
 | `TestMapSizeLockedWithSecondCursor`, `TestMapSizeCropsWithOneCursor` | `internal/app` | D-14, with the crop path as its own negative control |
 | `TestJoinerOnAnotherTerminalSharesTheMapFromTickZero` | `internal/app` | D-14/D-11: a participant on a different terminal holds the boot cursor on the session's cell, not its own |
 | `TestSessionRunNeverCropsItsMap` | `internal/app` | D-14: a run that opened a session keeps its bounds through a resize, so the anchor it offers cannot move |
-| `TestLockedResizeLeavesTheFlowFieldPhaseAlone` | `internal/app` | D-17: a resize that moves no cursor announces none, with the cropping resize as its negative control |
+| `TestLocalViewChangesLeaveTheFlowFieldPhaseAlone` | `internal/app` | D-17: neither a resize that moves no cursor nor a local rebind announces one, with the cropping resize as the negative control |
 | `TestParticipantsShareTheCorpusFingerprintNotItsCursor` | `internal/app` | §7: the corpus fingerprint is compared and the cursor's position in it is not, over a multi-file corpus the embedded one cannot express |
 | `TestSharedGlyphsAreGoldMembersOnly` | `internal/app` | §4: every shared-domain glyph is a gold composite member |
 | `TestSharedSnapshotParityAcrossTerminalSizes` | `internal/app` | D-11: two instances of one seed on different terminal sizes agree at every step |
