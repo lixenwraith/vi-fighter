@@ -342,3 +342,47 @@ func TestThreeParticipantLobbyClosesOnOneRoster(t *testing.T) {
 		}
 	}
 }
+
+// TestDepartureReachesTheWholeMesh closes the membership half of the mesh. In the
+// chain 1—2—3, participant 3's departure is observed only by 2, which shares no link
+// with... nothing: 1 never sees the disconnect at all. If the removal happened where
+// it was observed, participant 1 would keep a cursor nobody simulates for the rest of
+// the session, and the two instances would disagree about the roster forever.
+func TestDepartureReachesTheWholeMesh(t *testing.T) {
+	apps := meshSession(t, 0x5EEDBEEF, 3, [][2]int{{1, 2}, {2, 3}})
+	local := localCursors(t, apps)
+
+	for range 3 {
+		tickAll(apps)
+	}
+	assertMeshParity(t, apps, -1)
+
+	// Participant 3 leaves. Only its neighbour has a link to lose.
+	apps[2].World().RunSafe(func() {
+		apps[2].World().Resources.Network.Port.(*network.MeshPort).Close()
+	})
+
+	survivors := apps[:2]
+	for range parameter.NetworkBarrierDelayTicks + 4 {
+		tickAll(survivors)
+	}
+
+	for i, a := range survivors {
+		var slot core.Entity
+		var count int
+		a.World().RunSafe(func() {
+			slot = a.World().Resources.Player.Slot(2)
+			count = a.World().Resources.Player.Count()
+		})
+		if slot != 0 || count != 2 {
+			t.Fatalf("participant %d roster after departure = slot2 %d, count %d; want 0 and 2",
+				i+1, slot, count)
+		}
+		// Its own cursor is untouched: a departure removes one participant, not the
+		// instance that noticed it.
+		if !ownsCursor(a, local[i]) {
+			t.Fatalf("participant %d lost its own cursor to another's departure", i+1)
+		}
+	}
+	assertMeshParity(t, survivors, 0)
+}

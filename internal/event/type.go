@@ -99,6 +99,8 @@ const (
 	EventNetworkConnect
 	// EventNetworkDisconnect (NetworkDisconnectPayload) [local] signals peer disconnection
 	EventNetworkDisconnect
+	// EventParticipantDeparted (ParticipantDepartedPayload) [bus] removes a participant from the session roster
+	EventParticipantDeparted
 	// EventCursorStateSync (CursorStatePayload) [local] carries one cursor's owner-authored state to the instances that do not simulate it
 	EventCursorStateSync
 
