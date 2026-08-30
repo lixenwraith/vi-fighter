@@ -33,10 +33,9 @@ var stampingPush = map[string]bool{
 // TestEventClassMatchesSystemProfile; an entry that stops describing real code
 // fails TestCrossingPushesAreLive.
 var crossingPushes = map[string]string{
-	// D-3 table, area effect: the explosion request carries centers, radius,
-	// duration, attack family and owner cursor.
-	"missile:EventExplosionRequest":   "missile impact; the explosion centers cross",
-	"dust:EventExplosionBatchRequest": "dust detonation; the explosion centers cross",
+	// D-3 table, area effect: combat geometry crosses; visual centers stay local.
+	"missile:EventExplosionRequest":   "missile impact; center, radius, attack family and owner cross",
+	"dust:EventExplosionBatchRequest": "dust detonation; centers, radius, attack family and owner cross",
 	"weapon:EventExplosionRequest":    "disruptor pulse; center, ellipse radius, attack family and owner cross",
 
 	// D-3 table, drain fusion: the spawn request carries the header cell only.
@@ -51,8 +50,8 @@ var crossingPushes = map[string]string{
 	// shared outcome is determined by the artifact it pushes, so each takes the
 	// same wire path as the rows above.
 	"drain:EventCombatHealRequest":  "a dying drain donating its hit points; target and amount cross",
-	"drain:EventDrainDefeated":      "one personal drain death advances shared progression",
-	"fuse:EventDrainDefeated":       "each fused personal drain advances shared progression",
+	"drain:EventDrainDefeated":      "one personal drain death and its causal cursor advance shared progression",
+	"fuse:EventDrainDefeated":       "each fused personal drain and its causal cursor advance shared progression",
 	"typing:EventCursorMoveRequest": "the post-typing advance moves the shared cursor",
 	"energy:EventCursorDefeatState": "the owner's combined energy/heat lifecycle state crosses",
 	"heat:EventCursorDefeatState":   "the owner's combined energy/heat lifecycle state crosses",

@@ -159,6 +159,13 @@ type CursorDefeatStatePayload struct {
 	Defeated bool        `toml:"defeated"`
 }
 
+// DrainDefeatedPayload names the shared cursor whose player domain produced one
+// personal drain defeat. When a shared threshold is crossed, this is the causal
+// election key that selects exactly one player-domain continuation.
+type DrainDefeatedPayload struct {
+	Entity core.Entity `toml:"entity"`
+}
+
 // MetaStatusMessagePayload contains message to be displayed in status bar
 type MetaStatusMessagePayload struct {
 	Message          string        `toml:"message"`
@@ -483,38 +490,51 @@ type FlashRequestPayload struct {
 
 // --- Explosion ---
 
-// ExplosionType differentiates visual and behavioral explosion variants
+// ExplosionType differentiates local presentation palettes.
 type ExplosionType uint8
 
 const (
 	ExplosionTypeDust    ExplosionType = iota // Converts glyphs to dust, cyan palette
 	ExplosionTypeMissile                      // Visual only, warm palette
 	ExplosionTypeEye                          // Self-destruct explosion with character noise
-	ExplosionTypePulse                        // Combat geometry only; PulseComponent owns the visual
 )
 
-// ExplosionRequestPayload describes one explosion center: geometry, combat family and
-// visual variant. Attack has no safe zero value; producers must set it explicitly.
+// ExplosionRequestPayload is the D-3 combat artifact for one explosion center.
+// Attack has no safe zero value; producers must set it explicitly.
 type ExplosionRequestPayload struct {
-	Entity   core.Entity                `toml:"entity"` // Owner cursor, credited for damage
-	X        int                        `toml:"x"`
-	Y        int                        `toml:"y"`
-	Radius   float64                    `toml:"radius"`   // 0 = ExplosionFieldRadius
-	Duration time.Duration              `toml:"duration"` // 0 = ExplosionFieldDuration
-	Attack   component.CombatAttackType `toml:"attack"`   // CombatAttackNone = visual only
-	Type     ExplosionType              `toml:"type"`     // Palette selection
+	Entity core.Entity                `toml:"entity"` // Owner cursor, credited for damage
+	X      int                        `toml:"x"`
+	Y      int                        `toml:"y"`
+	Radius float64                    `toml:"radius"` // 0 = ExplosionFieldRadius
+	Attack component.CombatAttackType `toml:"attack"`
 }
 
-// ExplosionBatchRequestPayload describes one explosion made of several centers sharing
-// geometry, combat family and visual variant. Pooled: the consumer releases it.
+// ExplosionBatchRequestPayload describes one combat artifact made of several
+// centers sharing geometry and combat family. Pooled: the consumer releases it.
 // Producers must truncate Centers at parameter.ExplosionRequestCenterCap so a
-// map-wide detonation cannot flood the event queue or the center array.
+// map-wide detonation cannot flood the event queue.
 type ExplosionBatchRequestPayload struct {
+	Centers []ExplosionCenterEntry
+	Entity  core.Entity
+	Radius  float64
+	Attack  component.CombatAttackType
+}
+
+// ExplosionVisualRequestPayload is player-domain presentation for one center.
+type ExplosionVisualRequestPayload struct {
+	X        int           `toml:"x"`
+	Y        int           `toml:"y"`
+	Radius   float64       `toml:"radius"`
+	Duration time.Duration `toml:"duration"`
+	Type     ExplosionType `toml:"type"`
+}
+
+// ExplosionVisualBatchRequestPayload is player-domain presentation for a group
+// of centers. It is not pooled: the local queue owns the producer's slice copy.
+type ExplosionVisualBatchRequestPayload struct {
 	Centers  []ExplosionCenterEntry
-	Entity   core.Entity
 	Radius   float64
 	Duration time.Duration
-	Attack   component.CombatAttackType
 	Type     ExplosionType
 }
 
@@ -649,11 +669,21 @@ type CursorStatePayload struct {
 type CursorSpawnRequestPayload struct {
 	X       int    `toml:"x"`
 	Y       int    `toml:"y"`
+	Heat    int    `toml:"heat"`
+	Energy  int    `toml:"energy"`
 	Slot    uint8  `toml:"slot"`
 	Control uint8  `toml:"control"` // component.ControlKind
 	PeerID  uint32 `toml:"peer_id"` // Remote owner when Control is ControlRemote
 	Auto    bool   `toml:"auto"`
 	Center  bool   `toml:"center"`
+}
+
+// CursorArmRequestPayload restores the configured starting resources on the
+// cursor this instance owns. It is local by design: heat and energy are D-13
+// owner-authored state after the shared cursor has been created.
+type CursorArmRequestPayload struct {
+	Heat   int `toml:"heat"`
+	Energy int `toml:"energy"`
 }
 
 // CursorSpawnedPayload announces a created cursor
@@ -699,6 +729,12 @@ type CursorSetLocalPayload struct {
 }
 
 // --- Fuse ---
+
+// FuseQuasarRequestPayload selects which participant owns the player-domain
+// continuation of one shared escalation decision.
+type FuseQuasarRequestPayload struct {
+	Entity core.Entity `toml:"entity"`
+}
 
 // FuseEffect defines visual effect type for fusion animations
 type FuseEffect int

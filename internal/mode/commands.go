@@ -50,6 +50,16 @@ func ExecuteCommand(ctx *engine.GameContext, command string) CommandResult {
 	cmd := parts[0]
 	args := parts[1:]
 
+	// A live operator may inspect the instance and author its own player state,
+	// but may not mutate shared scheduling, systems or FSM configuration locally.
+	if ctx.World.LiveSession() {
+		switch cmd {
+		case "sp", "speed", "st", "step", "s", "system", "e", "emit", "event", "r", "region":
+			setCommandError(ctx, "Command unavailable in a live session: :"+cmd)
+			return CommandResult{Continue: true, KeepPaused: false}
+		}
+	}
+
 	// Execute based on command
 	switch cmd {
 	case "flow":
@@ -279,7 +289,15 @@ func handleQuitCommand(ctx *engine.GameContext) CommandResult {
 
 // handleNewCommand resets the game state via event; purge also clears operator session state
 func handleNewCommand(ctx *engine.GameContext, purge bool) CommandResult {
-	ctx.PushEvent(event.EventGameResetRequest, &event.GameResetPayload{Purge: purge})
+	if ctx.World.LiveSession() {
+		if !ctx.World.IsSessionCoordinator() {
+			setCommandError(ctx, "Only the host can reset a live session")
+			return CommandResult{Continue: true, KeepPaused: false}
+		}
+		ctx.PushCrossing(event.EventGameResetRequest, &event.GameResetPayload{Purge: purge})
+	} else {
+		ctx.PushEvent(event.EventGameResetRequest, &event.GameResetPayload{Purge: purge})
+	}
 	cmd := ":new"
 	if purge {
 		cmd = ":new!"
@@ -527,6 +545,11 @@ func handleDebugCommand(ctx *engine.GameContext, args []string) CommandResult {
 // Command mode still holds the world lock and the pause, so the values are a
 // single coherent tick. Opens a second logger: a deliberate operator cost
 func handleDebugSaveCommand(ctx *engine.GameContext) CommandResult {
+	if ctx.World.LiveSession() {
+		setCommandError(ctx, "Snapshot save unavailable in a live session")
+		return CommandResult{Continue: true, KeepPaused: false}
+	}
+
 	path, err := vlog.Dump(func(emit func(sub string, args ...any)) {
 		ctx.SnapshotContext(emit)
 		ctx.World.Resources.Status.Snapshot(emit)
