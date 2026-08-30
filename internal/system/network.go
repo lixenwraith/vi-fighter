@@ -2,6 +2,7 @@ package system
 
 import (
 	"cmp"
+	"encoding/json"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,8 @@ type NetworkSystem struct {
 	buf [parameter.NetworkDrainWindow]network.Inbound // per-tick drain window
 
 	syncSeq   uint64
-	lastSync  [parameter.MaxPlayers]uint64 // last applied sync per slot, for reordering
+	lastSync  [parameter.MaxPlayers]uint64   // last applied sync per slot, for reordering
+	departed  [parameter.MaxPlayers + 1]bool // participants already announced or noticed
 	ticks     uint64
 	statSent  *atomic.Int64
 	statRecv  *atomic.Int64
@@ -133,6 +135,11 @@ func (w *epochWindow) admit(tick uint64) bool {
 // telemetry that asks how far behind a peer's production is.
 func (w *epochWindow) newest() uint64 { return w.high }
 
+// coordinatorParticipant is the identity the handshake always assigns to the host.
+// It is the one participant every topology the session can build has a path to, which
+// is what makes it the single producer of a departure crossing.
+const coordinatorParticipant uint32 = 1
+
 // barrierArtifact is one encoded local or peer crossing waiting for its apply tick.
 type barrierArtifact struct {
 	frame     event.WireFrame
@@ -176,6 +183,7 @@ func (s *NetworkSystem) Init() {
 	s.ticks = 0
 	s.syncSeq = 0
 	s.lastSync = [parameter.MaxPlayers]uint64{}
+	s.departed = [parameter.MaxPlayers + 1]bool{}
 
 	s.statSent.Store(0)
 	s.statRecv.Store(0)
@@ -239,6 +247,7 @@ func (s *NetworkSystem) EventTypes() []event.EventType {
 	return []event.EventType{
 		event.EventMetaSystemCommandRequest,
 		event.EventGameResetRequest,
+		event.EventParticipantDeparted,
 	}
 }
 
@@ -250,6 +259,28 @@ func (s *NetworkSystem) HandleEvent(ev event.GameEvent) {
 		if p, ok := ev.Payload.(*event.MetaSystemCommandPayload); ok && p.SystemName == s.Name() {
 			s.enabled = p.Enabled
 		}
+	case event.EventParticipantDeparted:
+		if p, ok := ev.Payload.(*event.ParticipantDepartedPayload); ok {
+			s.removeParticipant(p)
+		}
+	}
+}
+
+// removeParticipant applies the departure crossing. It arrives at the same apply
+// tick on every instance, so the despawn it derives does too (D-5) — which is the
+// whole reason a disconnect is not acted on where it is observed.
+func (s *NetworkSystem) removeParticipant(p *event.ParticipantDepartedPayload) {
+	if int(p.Slot) >= parameter.MaxPlayers {
+		return
+	}
+	cursor := s.world.Resources.Player.Slot(p.Slot)
+	if cursor == 0 || s.world.SimulatesLocally(cursor) {
+		return
+	}
+	s.world.PushEvent(event.EventCursorDespawnRequest, &event.CursorDespawnRequestPayload{Slot: p.Slot})
+	s.lastSync[p.Slot] = 0
+	if int(p.Participant) < len(s.departed) {
+		s.departed[p.Participant] = true
 	}
 }
 
@@ -352,7 +383,7 @@ func (s *NetworkSystem) drain(p engine.NetworkPort) int {
 			queued++
 		case network.InboundDisconnect:
 			s.world.PushLocal(event.EventNetworkDisconnect, &event.NetworkDisconnectPayload{PeerID: uint32(in.Peer)})
-			s.despawnPeer(uint32(in.Peer))
+			s.noticeDeparture(uint32(in.Peer))
 			queued++
 		case network.InboundMessage:
 			queued += s.dispatchMessage(uint32(in.Peer), in.Msg)
@@ -361,23 +392,92 @@ func (s *NetworkSystem) drain(p engine.NetworkPort) int {
 	return queued
 }
 
-// despawnPeer leaves the local simulation alive with only its connected roster.
-// The slot's sync sequence is released with it: sequences are per-sender and restart
-// at one, so a slot refilled by a later participant must not be gated by the numbers
-// its predecessor already used.
-func (s *NetworkSystem) despawnPeer(peerID uint32) {
-	s.world.Components.Cursor.Each(func(_ core.Entity, c *component.CursorComponent) bool {
-		if c.Control == component.ControlRemote && c.PeerID == peerID {
-			s.world.PushEvent(event.EventCursorDespawnRequest, &event.CursorDespawnRequestPayload{Slot: c.Slot})
-			if int(c.Slot) < parameter.MaxPlayers {
-				s.lastSync[c.Slot] = 0
-			}
-		}
-		return true
-	})
+// noticeDeparture reacts to a lost link. It deliberately does not despawn anything:
+// only a direct neighbour sees a disconnect, and it sees it at a moment of its own
+// transport's choosing, so acting here would remove a shared cursor at a different
+// tick on every instance — and not at all on instances that never linked to the
+// departing participant.
+//
+// Instead exactly one instance turns the observation into a crossing. The
+// coordinator is that instance: it is the only participant every topology this
+// session can build guarantees a path to, and one producer is what gives the
+// departure a single apply tick. A neighbour that is not the coordinator floods a
+// notice instead, deduped by departing participant like any other artifact.
+//
+// The identity release is separate and stays local: which identities the lobby may
+// hand out again is this instance's own bookkeeping, not shared state.
+func (s *NetworkSystem) noticeDeparture(peerID uint32) {
 	if r := s.world.Resources.Network; r != nil && r.OnDeparture != nil {
 		r.OnDeparture(peerID)
 	}
+	s.announceDeparture(peerID, 0)
+}
+
+// announceDeparture crosses or forwards one departure, once. from is the link a
+// notice arrived on, or zero when this instance observed the disconnect itself.
+func (s *NetworkSystem) announceDeparture(peerID uint32, from uint32) bool {
+	if peerID == 0 || int(peerID) >= len(s.departed) || s.departed[peerID] {
+		return false
+	}
+	s.departed[peerID] = true
+
+	slot, ok := s.participantSlot(peerID)
+	if !ok {
+		return true
+	}
+	if s.isCoordinator() {
+		s.world.PushCrossing(event.EventParticipantDeparted,
+			&event.ParticipantDepartedPayload{Participant: peerID, Slot: slot})
+		return true
+	}
+	p := s.port()
+	if p == nil || !p.IsRunning() || p.PeerCount() == 0 {
+		return true
+	}
+	body, err := json.Marshal(event.ParticipantDepartedPayload{Participant: peerID, Slot: slot})
+	if err != nil {
+		s.statDrop.Add(1)
+		return true
+	}
+	p.BroadcastExcept(from, uint8(network.MsgDisconnect), body)
+	s.statRelayed.Add(1)
+	return true
+}
+
+// receiveDeparture handles a neighbour's notice: the coordinator turns it into the
+// crossing, anyone else passes it on.
+func (s *NetworkSystem) receiveDeparture(from uint32, body []byte) {
+	var p event.ParticipantDepartedPayload
+	if err := json.Unmarshal(body, &p); err != nil {
+		s.statDrop.Add(1)
+		return
+	}
+	if !s.announceDeparture(p.Participant, from) {
+		s.statDuplicates.Add(1)
+	}
+}
+
+// isCoordinator reports whether this instance owns the session's first identity,
+// which is the one the handshake always assigns to the host.
+func (s *NetworkSystem) isCoordinator() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.localSource == coordinatorParticipant
+}
+
+// participantSlot finds the roster slot a peer-owned cursor occupies.
+// Caller MUST hold updateMutex.
+func (s *NetworkSystem) participantSlot(peerID uint32) (uint8, bool) {
+	var slot uint8
+	found := false
+	s.world.Components.Cursor.Each(func(_ core.Entity, c *component.CursorComponent) bool {
+		if c.Control == component.ControlRemote && c.PeerID == peerID {
+			slot, found = c.Slot, true
+			return false
+		}
+		return true
+	})
+	return slot, found
 }
 
 // publishConnectionTelemetry exposes the poll endpoint and D-14 latch state.
@@ -428,6 +528,8 @@ func (s *NetworkSystem) dispatchMessage(from uint32, msg *network.Message) int {
 		s.scheduleCrossings(from, msg.Payload)
 	case network.MsgStateSync:
 		s.applyCursorState(from, msg.Payload)
+	case network.MsgDisconnect:
+		s.receiveDeparture(from, msg.Payload)
 	default:
 		s.statDrop.Add(1)
 	}
