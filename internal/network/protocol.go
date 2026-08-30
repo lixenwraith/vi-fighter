@@ -22,17 +22,20 @@ const (
 	MsgStateSync MessageType = 0x11 // Live: one cursor's owner-authored state (D-13)
 	MsgEvent     MessageType = 0x12 // Live: one closed barrier production epoch
 
+	// Membership. A departure is observed only by a direct neighbour, so a neighbour
+	// that is not the coordinator forwards a notice rather than acting on it.
+	MsgDisconnect MessageType = 0x03 // Live: a participant's link was lost
+
 	// Coordination, in the order the startup handshake runs them
 	MsgJoinOffer MessageType = 0x22 // Live: host offers the session anchor and roster assignment
 	MsgJoinReply MessageType = 0x23 // Live: joiner accepts or rejects the offered identity
 	MsgStart     MessageType = 0x24 // Live: host releases the participants into tick zero
 	MsgReady     MessageType = 0x25 // Live: joiner confirms it received the start gate
 
-	// Reserved, unused: explicit connect/disconnect and acknowledgement control, which
-	// the stream's own lifecycle carries today; roster and coordinator assignment
-	// beyond the startup offer; and authentication.
+	// Reserved, unused: explicit connect and acknowledgement control, which the
+	// stream's own lifecycle carries today; roster and coordinator assignment beyond
+	// the startup offer; and authentication.
 	MsgConnect      MessageType = 0x02
-	MsgDisconnect   MessageType = 0x03
 	MsgAck          MessageType = 0x04
 	MsgPeerList     MessageType = 0x20
 	MsgRoleAssign   MessageType = 0x21

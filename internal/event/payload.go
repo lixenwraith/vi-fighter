@@ -121,6 +121,16 @@ type NetworkConnectPayload struct {
 	PeerID uint32 `toml:"peer_id"`
 }
 
+// ParticipantDepartedPayload names the roster slot a departed participant held. It
+// is the crossing that makes a departure shared state: a link disconnect is observed
+// only by a direct neighbour and at a moment of that neighbour's own choosing, so the
+// removal has to travel as an artifact with an apply tick, like any other outcome
+// every instance must reach together.
+type ParticipantDepartedPayload struct {
+	Participant uint32 `toml:"participant"`
+	Slot        uint8  `toml:"slot"`
+}
+
 // NetworkDisconnectPayload signals peer disconnection
 type NetworkDisconnectPayload struct {
 	PeerID uint32 `toml:"peer_id"`
