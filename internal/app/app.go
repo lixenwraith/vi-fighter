@@ -168,6 +168,7 @@ func (a *App) initWorld() {
 	a.hub.BindResources(a.world.Resources)
 	if r := a.world.Resources.Network; r != nil {
 		r.OnDeparture = a.releaseParticipant32
+		r.SharedDigest = a.sharedDigestLocked
 	}
 
 	// The terminal supplies color whenever one exists, but dimensions only when the
@@ -216,6 +217,13 @@ func (a *App) initWorld() {
 	// Initial rate; ParseScale rejects "" so a bare run stays at real time
 	if s, ok := engine.ParseScale(a.cfg.TimeScaleSpec); ok {
 		a.ctx.TimeCtl.SetScale(s)
+	}
+	// The host can wait in the lobby much longer than a joiner. Freeze both clocks
+	// before the FSM creates any game-time deadline, then release them only after
+	// the common start gate. Otherwise the lobby wait ages the host's gold timer and
+	// every other absolute deadline before tick one.
+	if a.cfg.HostAddress != "" || a.cfg.JoinAddress != "" {
+		a.ctx.TimeCtl.SetPaused(true)
 	}
 
 	// Systems; AddSystem sorts by Priority(), manifest order breaks ties

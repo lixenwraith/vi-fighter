@@ -4,7 +4,7 @@ package event
 
 // EventTypeCount is the number of declared EventType constants, including EventNone
 // Values are contiguous in [0, EventTypeCount)
-const EventTypeCount = 169
+const EventTypeCount = 172
 
 // InitRegistry populates the registry from the EventType const block in type.go
 // Must be called once at startup
@@ -90,6 +90,8 @@ func InitRegistry() {
 	RegisterType("EventFlashSpawnBatchRequest", EventFlashSpawnBatchRequest, nil)
 	RegisterType("EventExplosionRequest", EventExplosionRequest, &ExplosionRequestPayload{})
 	RegisterType("EventExplosionBatchRequest", EventExplosionBatchRequest, &ExplosionBatchRequestPayload{})
+	RegisterType("EventExplosionVisualRequest", EventExplosionVisualRequest, &ExplosionVisualRequestPayload{})
+	RegisterType("EventExplosionVisualBatchRequest", EventExplosionVisualBatchRequest, &ExplosionVisualBatchRequestPayload{})
 	RegisterType("EventDustSpawnOneRequest", EventDustSpawnOneRequest, &DustSpawnOneRequestPayload{})
 	RegisterType("EventDustSpawnBatchRequest", EventDustSpawnBatchRequest, nil)
 	RegisterType("EventDustAllRequest", EventDustAllRequest, nil)
@@ -107,6 +109,7 @@ func InitRegistry() {
 	RegisterType("EventCursorSpawnRequest", EventCursorSpawnRequest, &CursorSpawnRequestPayload{})
 	RegisterType("EventCursorSpawned", EventCursorSpawned, &CursorSpawnedPayload{})
 	RegisterType("EventCursorSpawnFailed", EventCursorSpawnFailed, nil)
+	RegisterType("EventCursorArmRequest", EventCursorArmRequest, &CursorArmRequestPayload{})
 	RegisterType("EventCursorDespawnRequest", EventCursorDespawnRequest, &CursorDespawnRequestPayload{})
 	RegisterType("EventCursorDespawned", EventCursorDespawned, &CursorDespawnedPayload{})
 	RegisterType("EventCursorMoveRequest", EventCursorMoveRequest, &CursorMoveRequestPayload{})
@@ -116,8 +119,8 @@ func InitRegistry() {
 	RegisterType("EventCursorLocalChanged", EventCursorLocalChanged, &CursorSetLocalPayload{})
 	RegisterType("EventSpeciesCreated", EventSpeciesCreated, &SpeciesCreatedPayload{})
 	RegisterType("EventSpeciesKilled", EventSpeciesKilled, &SpeciesKilledPayload{})
-	RegisterType("EventDrainDefeated", EventDrainDefeated, nil)
-	RegisterType("EventFuseQuasarRequest", EventFuseQuasarRequest, nil)
+	RegisterType("EventDrainDefeated", EventDrainDefeated, &DrainDefeatedPayload{})
+	RegisterType("EventFuseQuasarRequest", EventFuseQuasarRequest, &FuseQuasarRequestPayload{})
 	RegisterType("EventFuseSwarmRequest", EventFuseSwarmRequest, &FuseSwarmRequestPayload{})
 	RegisterType("EventDrainPause", EventDrainPause, nil)
 	RegisterType("EventDrainResume", EventDrainResume, nil)
@@ -207,7 +210,7 @@ var eventClasses = [EventTypeCount]EventClass{
 	EventParticipantJoined:               ClassBus,
 	EventParticipantDeparted:             ClassBus,
 	EventCursorStateSync:                 ClassLocal,
-	EventGameResetRequest:                ClassShared,
+	EventGameResetRequest:                ClassBus,
 	EventMetaDebugRequest:                ClassLocal,
 	EventMetaHelpRequest:                 ClassLocal,
 	EventMetaAboutRequest:                ClassLocal,
@@ -265,6 +268,8 @@ var eventClasses = [EventTypeCount]EventClass{
 	EventFlashSpawnBatchRequest:          ClassLocal,
 	EventExplosionRequest:                ClassBus,
 	EventExplosionBatchRequest:           ClassBus,
+	EventExplosionVisualRequest:          ClassLocal,
+	EventExplosionVisualBatchRequest:     ClassLocal,
 	EventDustSpawnOneRequest:             ClassLocal,
 	EventDustSpawnBatchRequest:           ClassLocal,
 	EventDustAllRequest:                  ClassLocal,
@@ -282,6 +287,7 @@ var eventClasses = [EventTypeCount]EventClass{
 	EventCursorSpawnRequest:              ClassShared,
 	EventCursorSpawned:                   ClassShared,
 	EventCursorSpawnFailed:               ClassShared,
+	EventCursorArmRequest:                ClassLocal,
 	EventCursorDespawnRequest:            ClassShared,
 	EventCursorDespawned:                 ClassShared,
 	EventCursorMoveRequest:               ClassBus,
