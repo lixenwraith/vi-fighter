@@ -14,14 +14,19 @@ import (
 // pair builds two joined participants on one seed, linked by an in-process
 // transport. Each spawns its own cursor in its own slot and mirrors the other's as
 // a remote, which is the roster a real join produces.
+//
+// The two terminals are deliberately unequal. Two participants of one size share
+// every viewport-derived value by accident, so a criterion built on them cannot see
+// a shared value that was derived from the local terminal — which is exactly the
+// divergence a second window, a tmux pane or a resize produces.
 func pair(t *testing.T, seed uint64, steps int) (*App, *App) {
 	t.Helper()
 
 	a := mustHeadless(t, seed, 120, 40)
-	b := mustHeadless(t, seed, 120, 40)
+	an := a.JoinAnchor()
+	b := mustJoiner(t, seed, 84, 26, an)
 	t.Cleanup(func() { a.Close(); b.Close() })
 
-	an := a.JoinAnchor()
 	if err := b.Join(an); err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -39,6 +44,24 @@ func pair(t *testing.T, seed uint64, steps int) (*App, *App) {
 		x.Tick(1)
 	}
 	return a, b
+}
+
+// liveScript is the action set a two-participant criterion drives. The harness owns
+// the clock and holds the operator mutations no artifact carries fixed: FSM regions,
+// the programmatic level setup, commands and the overlay round trip.
+//
+// Resizes and viewport-relative motions are deliberately not among them. Each
+// participant drives its own terminal and its own camera, so a resize has to reflow
+// this instance's view without touching shared state and a screen-relative motion
+// has to resolve locally and cross as the absolute cell it selected — which is
+// exactly what they failed to do, and what no parity criterion could see while every
+// one of them held both fixed.
+func liveScript(seed uint64, steps int) ScriptOptions {
+	opt := parityScript(seed, steps)
+	opt.Regions, opt.MapSetups = false, false
+	opt.DisableTicks, opt.DisableCommands, opt.DisableOverlays = true, true, true
+	opt.Resizes, opt.MapMotionsOnly = true, false
+	return opt
 }
 
 // mirrorCursors splits ownership of a two-slot roster. Both instances run the
@@ -221,10 +244,7 @@ func TestBarrierIsNoOpWithoutPeer(t *testing.T) {
 // one-way traffic: local and peer artifacts apply at the same future tick boundary.
 func TestObserverSharedStateTracksTheLiveParticipant(t *testing.T) {
 	const seed = 0x5EEDBEEF
-	steps := 1200
-	if testing.Short() {
-		steps = 120
-	}
+	steps := soakScale(120, 400, 1200)
 
 	live, observer := pair(t, seed, steps)
 	observeOnly(t, observer)
@@ -256,16 +276,13 @@ func TestObserverSharedStateTracksTheLiveParticipant(t *testing.T) {
 // TestTwoLiveParticipantsStayInLockstep is the headless two-participant criterion.
 func TestTwoLiveParticipantsStayInLockstep(t *testing.T) {
 	const seed = 0x5EEDBEEF
-	steps := 1200
-	if testing.Short() {
-		steps = 120
-	}
+	steps := soakScale(120, 400, 1200)
 
 	a, b := pair(t, seed, steps)
 	localA, _ := mirrorCursors(t, a, b)
 	var localB core.Entity
 	b.World().RunSafe(func() { localB = b.World().Resources.Player.Slot(1) })
-	proveTwoLive(t, a, b, localA, localB, seed, steps, func() {
+	proveTwoLive(t, a, b, localA, localB, liveScript(seed, steps), func() {
 		a.Tick(1)
 		b.Tick(1)
 	})
@@ -325,10 +342,9 @@ func TestActivatedSessionDefersCrossingBeforeFirstTick(t *testing.T) {
 // stream framing, the anchor handshake and canonical socket participant IDs.
 func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
 	const seed = 0x5EEDBEEF
-	steps := 1200
-	if testing.Short() {
-		steps = 120
-	}
+	// The socket leg re-proves the same criterion through framing, a real handshake
+	// and a mid-run join, none of which need the long run the in-process one takes.
+	steps := soakScale(80, 240, 800)
 
 	a, err := NewHeadless(Config{
 		Seed: seed, Width: 120, Height: 40, ForceDefault: true, RetainSessionLog: true,
@@ -396,7 +412,7 @@ func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
 	var localA, localB core.Entity
 	a.World().RunSafe(func() { localA = a.World().Resources.Player.Slot(0) })
 	b.World().RunSafe(func() { localB = b.World().Resources.Player.Slot(1) })
-	proveTwoLive(t, a, b, localA, localB, seed, steps, func() {
+	proveTwoLive(t, a, b, localA, localB, liveScript(seed, steps), func() {
 		recvA, recvB := host.Received(), guest.Received()
 		a.Tick(1)
 		b.Tick(1)
@@ -408,7 +424,11 @@ func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
 		t.Fatalf("guest disconnect: %v", err)
 	}
 	waitSocket(t, host, func() bool { return host.PeerCount() == 0 }, "host disconnect")
-	a.Tick(1)
+	// A departure is a crossing like any other, so it lands at the playout lead the
+	// session runs on rather than where the lost link was observed. The barrier owns
+	// it even though there is no peer left to send it to: the tick it applies at is
+	// what a reproduction of this run has to reach.
+	a.Tick(parameter.NetworkBarrierDelayTicks + 1)
 	var roster int
 	var state string
 	var peers int64
@@ -420,7 +440,9 @@ func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
 		peers = reg.Ints.Get("network.peers").Load()
 		latched = reg.Bools.Get("network.map_latched").Load()
 	})
-	if roster != 1 || !host.IsRunning() || state != "down" || peers != 0 || latched {
+	// The latch survives the disconnect: a run that opened a session keeps the bounds
+	// its participants adopted, so a returning one replays onto the same map (D-14).
+	if roster != 1 || !host.IsRunning() || state != "down" || peers != 0 || !latched {
 		t.Fatalf("host after disconnect = roster %d running %t state %q peers %d latch %t",
 			roster, host.IsRunning(), state, peers, latched)
 	}
@@ -465,14 +487,11 @@ func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
 	}
 }
 
-func proveTwoLive(t *testing.T, a, b *App, localA, localB core.Entity, seed uint64, steps int, tickPair func()) {
+func proveTwoLive(t *testing.T, a, b *App, localA, localB core.Entity, optA ScriptOptions, tickPair func()) {
 	t.Helper()
+	steps := optA.Steps
 	assertSharedParity(t, a, b, -1)
 
-	// The harness owns the clock and holds non-transported operator mutations fixed.
-	optA := parityScript(seed, steps)
-	optA.Regions, optA.MapSetups = false, false
-	optA.DisableTicks, optA.DisableCommands, optA.DisableOverlays = true, true, true
 	optB := optA
 	optB.Seed ^= 0x9E3779B97F4A7C15
 	da, db := NewScriptDriver(a, optA), NewScriptDriver(b, optB)

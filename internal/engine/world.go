@@ -60,6 +60,13 @@ type World struct {
 	// under updateMutex via WithDomain; atomic because lock-free pushers read it.
 	domain atomic.Int32
 
+	// sessionShared records that this world is, or reproduces, one shared with
+	// another participant. It is monotone — a session cannot be un-shared within a
+	// run — and it is not derived from the live transport, because a replay and a
+	// mid-run catch-up hold none and must still reach the bounds of the run they
+	// reproduce. Set from the join anchor at construction and by AttachTransport.
+	sessionShared atomic.Bool
+
 	// degradedSystems remembers the disabled systems that already reported an
 	// optional dependent, so a region re-applying its config reports once
 	degradedSystems sync.Map
@@ -344,16 +351,41 @@ func (w *World) PushEventDomain(eventType event.EventType, payload any, domain c
 	w.pushEvent(eventType, payload, event.Origin(w.origin.Load()), domain)
 }
 
-// MapSizeLocal reports whether this instance may derive map bounds from its own
-// terminal: nobody else shares the world, so a crop rewriting shared state is
-// admissible (D-14). Also gates the divergent-read warning in config_access.
-func (w *World) MapSizeLocal() bool {
-	if w.Resources.Player.Count() > 1 {
-		return false
+// MapSizeLocal reports whether this world may derive map bounds from its own
+// terminal: nobody else shares it, so a crop rewriting shared state is admissible
+// (D-14).
+//
+// Map bounds are shared simulation state, so every writer of them must be a
+// function of state every participant agrees on — and, because a run is reproduced
+// by replaying its record stream, of state a reproduction agrees on too. That is
+// the whole of SessionShared: a second rostered cursor, which is shared state, or
+// the latch a session run carries, which travels in the journal anchor rather than
+// being read off the live transport. Deriving the verdict from a transport made a
+// replay crop where the run it reproduces did not.
+func (w *World) MapSizeLocal() bool { return !w.SessionShared() }
+
+// SessionShared reports whether this world is, or reproduces, one shared with
+// another participant: a second rostered cursor, a bound session transport, or the
+// latch a reproduction adopted from its anchor.
+func (w *World) SessionShared() bool {
+	if w.sessionShared.Load() || w.Resources.Player.Count() > 1 {
+		return true
 	}
 	net := w.Resources.Network
-	return net == nil || net.Port == nil || net.Port.PeerCount() == 0
+	return net != nil && net.Port != nil
 }
+
+// SessionBarrier reports whether this run's crossings pass through the playout
+// barrier. It is the latch alone, not the roster: a local multi-cursor setup shares
+// no artifacts with anyone, while a reproduction of a session has to defer its
+// re-derived crossings by the same lead the run it reproduces did, or it applies
+// them earlier than the run did and drifts by exactly that lead.
+func (w *World) SessionBarrier() bool { return w.sessionShared.Load() }
+
+// MarkSessionShared latches the world as shared. Called when a session transport is
+// bound and when a run is constructed to reproduce one; never cleared, because the
+// bounds a participant has already adopted outlive the link that delivered them.
+func (w *World) MarkSessionShared() { w.sessionShared.Store(true) }
 
 // LiveSession reports whether this world is currently sharing ticks with peers.
 // A local multi-cursor setup has no transport and remains operator-controlled.
@@ -398,6 +430,23 @@ func (w *World) pushEvent(eventType event.EventType, payload any, origin event.O
 		Payload: payload,
 		Origin:  origin,
 		Domain:  domain,
+	})
+}
+
+// PushRecord republishes one journaled record without offering it to the wire.
+//
+// A record is already positioned: the journal stamps it where it was consumed, so a
+// crossing that the barrier deferred is recorded at the tick it applied at, not the
+// tick it was produced on. Offering it to the barrier again would defer it a second
+// playout lead past a position that already accounts for the first. Re-derived
+// crossings — the ones no record carries, because their producer is the simulation
+// — still go through Push and are deferred exactly as the recorded run deferred them.
+func (w *World) PushRecord(eventType event.EventType, payload any, origin event.Origin, domain core.Domain) {
+	if w.Resources.Event.Queue == nil {
+		return
+	}
+	w.Resources.Event.Queue.PushReady(event.GameEvent{
+		Type: eventType, Payload: payload, Origin: origin, Domain: domain,
 	})
 }
 

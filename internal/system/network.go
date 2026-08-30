@@ -72,7 +72,11 @@ type NetworkSystem struct {
 	digestHistory   [parameter.NetworkEpochWindow]stateDigest
 	pendingDigest   [parameter.MaxPlayers + 1]stateDigest
 	peerDesync      [parameter.MaxPlayers + 1]bool
+	peerMismatches  [parameter.MaxPlayers + 1]int
 	syncNoticeUntil uint64
+	statSyncPart    *status.AtomicString
+	statSyncTick    *atomic.Int64
+	statDiverged    *atomic.Bool
 
 	// Last reported transport loss, so a new one is logged once rather than per tick.
 	lastLostIn  uint64
@@ -196,6 +200,9 @@ func NewNetworkSystem(world *engine.World) engine.System {
 	s.statDuplicates = reg.Ints.Get("network.relay_duplicates")
 	s.statDigestMismatch = reg.Ints.Get("network.digest_mismatches")
 	s.statSyncState = reg.Strings.Get("network.sync_state")
+	s.statSyncPart = reg.Strings.Get("network.sync_part")
+	s.statSyncTick = reg.Ints.Get("network.sync_tick")
+	s.statDiverged = reg.Bools.Get("network.diverged")
 
 	s.Init()
 	return s
@@ -231,6 +238,10 @@ func (s *NetworkSystem) Init() {
 	s.statDuplicates.Store(0)
 	s.statDigestMismatch.Store(0)
 	s.statSyncState.Store("")
+	s.statSyncPart.Store("")
+	s.statSyncTick.Store(0)
+	s.statDiverged.Store(false)
+	s.peerMismatches = [parameter.MaxPlayers + 1]int{}
 	s.lastLostIn, s.lastLostOut = 0, 0
 	s.barrierActive.Store(false)
 	s.digestHistory = [parameter.NetworkEpochWindow]stateDigest{}
@@ -400,7 +411,14 @@ func (s *NetworkSystem) Cross(ev event.GameEvent) bool {
 // gate, the update pass, tick open and tick close — needs the same answer, and the
 // endpoint may be attached or lost between any two of them.
 func (s *NetworkSystem) refreshLink(p engine.NetworkPort) bool {
-	active := s.enabled && p != nil && p.IsRunning() && p.PeerCount() > 0
+	// The barrier belongs to the run, not to the link. A session's crossings are
+	// deferred by a fixed playout lead and apply at an absolute tick; a stretch that
+	// happens to have no peer attached — a lobby still waiting, every participant
+	// gone, or a replay reproducing the whole thing — must defer them by the same
+	// lead, because the tick an artifact applies at is what the reproduction has to
+	// reach. Sending is a separate question, answered by the port.
+	active := s.enabled && (s.world.SessionBarrier() ||
+		(p != nil && p.IsRunning() && p.PeerCount() > 0))
 	if r := s.world.Resources.Network; r != nil {
 		s.mu.Lock()
 		s.localSource = r.ParticipantID
@@ -485,9 +503,12 @@ func (s *NetworkSystem) forgetDigestPeer(peer uint32) {
 		return
 	}
 	s.peerDesync[peer] = false
+	s.peerMismatches[peer] = 0
 	s.pendingDigest[peer] = stateDigest{}
 	if !s.anyPeerDesynced() {
 		s.statSyncState.Store("")
+		s.statSyncPart.Store("")
+		s.statDiverged.Store(false)
 		s.syncNoticeUntil = 0
 	}
 }
@@ -614,7 +635,7 @@ func (s *NetworkSystem) publishConnectionTelemetry(p engine.NetworkPort) {
 			}
 		}
 	}
-	latched := !s.world.MapSizeLocal()
+	latched := s.world.SessionShared()
 	s.statPeers.Store(int64(peers))
 	s.statConnected.Store(peers > 0)
 	s.statConnection.StoreIfChanged(state)
@@ -691,6 +712,12 @@ func (s *NetworkSystem) flushCrossings(p engine.NetworkPort, completedTick uint6
 		if len(pending) != 0 {
 			s.statDrop.Add(int64(len(pending)))
 		}
+		return
+	}
+	// The barrier can own a tick that has nobody to send it to: a lobby still
+	// waiting, a session whose peers have all left, or a run being reproduced. The
+	// artifacts are still scheduled and still apply locally at their own tick.
+	if p == nil || !p.IsRunning() || p.PeerCount() == 0 {
 		return
 	}
 	body, err := event.EncodeWireBatch(event.WireBatch{
@@ -770,27 +797,51 @@ func (s *NetworkSystem) recordStateDigest(local stateDigest) {
 	}
 }
 
+// compareStateDigest folds one peer's sample against this instance's own at the same
+// tick. A single disagreement is not yet a report: an artifact that missed its apply
+// tick lands one side late and the next sample finds the two equal again, so the
+// indicator waits for NetworkDesyncSamples consecutive disagreements. Past
+// NetworkDivergedSamples the divergence is no longer transient — nothing re-derives
+// a missing artifact — and the session is marked diverged, which is what a recovery
+// acts on.
 func (s *NetworkSystem) compareStateDigest(peer uint32, local, remote stateDigest) {
 	wasDesynced := s.anyPeerDesynced()
-	mismatch := local.Hash != remote.Hash
-	peerWasDesynced := s.peerDesync[peer]
-	s.peerDesync[peer] = mismatch
 
-	if mismatch {
-		s.statDigestMismatch.Add(1)
-		s.statSyncState.Store("desync")
-		s.syncNoticeUntil = 0
-		if !peerWasDesynced {
-			vlog.Warn("app", "msg", "shared state divergence", "peer", peer,
-				"run", local.Run, "tick", local.Tick, "part", digestDifference(local, remote),
-				"local", local.Hash, "remote", remote.Hash)
+	if local.Hash == remote.Hash {
+		s.peerMismatches[peer] = 0
+		s.peerDesync[peer] = false
+		if wasDesynced && !s.anyPeerDesynced() {
+			s.statSyncState.Store("synced")
+			s.statSyncPart.Store("")
+			s.statDiverged.Store(false)
+			s.syncNoticeUntil = s.ticks + parameter.NetworkResyncNoticeTicks
+			vlog.Info("app", "msg", "shared state resynchronised",
+				"run", local.Run, "tick", local.Tick)
 		}
 		return
 	}
-	if wasDesynced && !s.anyPeerDesynced() {
-		s.statSyncState.Store("synced")
-		s.syncNoticeUntil = s.ticks + parameter.NetworkResyncNoticeTicks
-		vlog.Info("app", "msg", "shared state resynchronised", "run", local.Run, "tick", local.Tick)
+
+	s.statDigestMismatch.Add(1)
+	s.peerMismatches[peer]++
+	n := s.peerMismatches[peer]
+	if n < parameter.NetworkDesyncSamples {
+		return
+	}
+
+	part := digestDifference(local, remote)
+	if !s.peerDesync[peer] {
+		s.peerDesync[peer] = true
+		s.statSyncState.Store("desync")
+		s.statSyncPart.Store(part)
+		s.statSyncTick.Store(int64(local.Tick))
+		s.syncNoticeUntil = 0
+		vlog.Warn("app", "msg", "shared state divergence", "peer", peer,
+			"run", local.Run, "tick", local.Tick, "part", part,
+			"samples", n, "local", local.Hash, "remote", remote.Hash)
+	}
+	if n >= parameter.NetworkDivergedSamples && !s.statDiverged.Swap(true) {
+		vlog.Error("app", "msg", "shared state diverged", "peer", peer,
+			"run", local.Run, "tick", local.Tick, "part", part, "samples", n)
 	}
 }
 
