@@ -169,6 +169,11 @@ func (a *App) initWorld() {
 	if r := a.world.Resources.Network; r != nil {
 		r.OnDeparture = a.releaseParticipant32
 		r.SharedDigest = a.sharedDigestLocked
+		// A session endpoint exists, so this run is shared for its whole life
+		// whether or not a peer is attached at a given tick. Latching it here rather
+		// than reading the port keeps the anchor, the D-14 verdict and the playout
+		// barrier answering one question, which is what a reproduction adopts.
+		a.world.MarkSessionShared()
 	}
 
 	// The terminal supplies color whenever one exists, but dimensions only when the
@@ -192,6 +197,8 @@ func (a *App) initWorld() {
 		a.ctx = engine.NewGameContext(a.world, width, height)
 	}
 	a.world.Resources.Config.ColorMode = colorMode
+
+	a.applyMapLatch()
 
 	if n := a.cfg.StatTicks; n != 0 {
 		if n < 0 {
@@ -232,6 +239,30 @@ func (a *App) initWorld() {
 	}
 	// This game's streams are drawn; advance so the next game differs
 	a.world.Resources.Rand.NextSession()
+}
+
+// applyMapLatch installs this run's D-14 position before any system is built and
+// before the FSM boot script spawns cursor slot zero at the centre of the map.
+// Adopting bounds later would leave that shared cursor on this terminal's centre
+// rather than the session's, which is a shared position no crossing ever corrects.
+//
+// LockMap latches the world as shared, which closes the crop path and engages the
+// playout barrier for the whole run; a reproduction of a session — a join, a
+// catch-up or a replay — additionally carries the bounds it must start on. A
+// hosting run keeps its own terminal's bounds and only stops deriving them.
+func (a *App) applyMapLatch() {
+	if a.cfg.LockMap {
+		a.world.MarkSessionShared()
+	}
+	cfg := a.world.Resources.Config
+	if a.cfg.MapWidth <= 0 || a.cfg.MapHeight <= 0 {
+		return
+	}
+	if a.cfg.MapWidth == cfg.MapWidth && a.cfg.MapHeight == cfg.MapHeight &&
+		a.cfg.CropOnResize == cfg.CropOnResize {
+		return
+	}
+	a.world.SetupLevel(a.cfg.MapWidth, a.cfg.MapHeight, false, a.cfg.CropOnResize)
 }
 
 // initPresentation builds the render pipeline. The buffer is terminal-sized while
@@ -368,6 +399,7 @@ func (a *App) buildAnchor() event.JournalAnchor {
 		MapWidth:      cfg.MapWidth,
 		MapHeight:     cfg.MapHeight,
 		CropOnResize:  cfg.CropOnResize,
+		SessionShared: a.world.SessionShared(),
 	}
 }
 

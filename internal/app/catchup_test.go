@@ -4,9 +4,114 @@ import (
 	"testing"
 
 	"github.com/lixenwraith/vi-fighter/internal/core"
+	"github.com/lixenwraith/vi-fighter/internal/event"
 	"github.com/lixenwraith/vi-fighter/internal/network"
 	"github.com/lixenwraith/vi-fighter/internal/parameter"
 )
+
+// TestCatchUpReproducesALiveSessionsCrossings is the fidelity criterion the mid-run
+// join rests on, over the one shape a solo host cannot produce: a session whose
+// crossings passed through the playout barrier.
+//
+// Two things make a reproduction of that different from a reproduction of a solo
+// run. The crossings the host produced itself carry OriginSystem and are not
+// journaled at all — they are re-derived — so a reproduction has to defer them by
+// the same lead the run did, which is why the barrier belongs to the run rather than
+// to the live peer count. And the records that *are* journaled were stamped where
+// they were consumed, past that lead already, so offering them to the barrier again
+// would defer them twice. Either mistake alone drifts the reproduction by exactly
+// the playout lead, which surfaces as a whole gameplay cycle once an FSM deadline
+// falls inside it.
+func TestCatchUpReproducesALiveSessionsCrossings(t *testing.T) {
+	const seed = 0x5EEDBEEF
+	steps := soakScale(200, 500, 1200)
+
+	host, err := NewHeadless(Config{
+		Seed: seed, Width: 120, Height: 40, ForceDefault: true, RetainSessionLog: true,
+	})
+	if err != nil {
+		t.Fatalf("host: %v", err)
+	}
+	defer host.Close()
+	an := host.JoinAnchor()
+	guest := mustJoiner(t, seed, 84, 26, an)
+	defer guest.Close()
+	if err := guest.Join(an); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	host.adoptMapLatch(an.Anchor)
+	ph, pg := network.NewLoopbackPair(1, 2)
+	host.AttachTransport(ph)
+	guest.AttachTransport(pg)
+	for _, a := range []*App{host, guest} {
+		tickUntilCursor(t, a)
+		a.Tick(1)
+	}
+	mirrorCursors(t, host, guest)
+
+	optHost := liveScript(seed, steps)
+	optGuest := optHost
+	optGuest.Seed ^= 0x9E3779B97F4A7C15
+	dh, dg := NewScriptDriver(host, optHost), NewScriptDriver(guest, optGuest)
+	for i := range steps {
+		if !dh.Step() {
+			t.Fatalf("step %d quit the host", i)
+		}
+		if !dg.Step() {
+			t.Fatalf("step %d quit the guest", i)
+		}
+		host.Tick(1)
+		guest.Tick(1)
+	}
+	assertSharedParity(t, host, guest, steps)
+
+	records, at := host.SessionLog()
+	if len(records) == 0 || at.Tick == 0 {
+		t.Fatalf("host retained %d records at tick %d", len(records), at.Tick)
+	}
+
+	// The anchor a mid-run joiner receives is the live one, taken while the session
+	// is running: it names the position to reach and carries the latch that engages
+	// the playout barrier for the reproduction.
+	live := host.JoinAnchor()
+	if !live.Anchor.SessionShared {
+		t.Fatal("the live anchor does not describe a shared session")
+	}
+	late := mustJoiner(t, seed, 120, 40, live)
+	defer late.Close()
+	if err := late.CatchUp(live, records); err != nil {
+		t.Fatalf("catch up: %v", err)
+	}
+	assertSharedParity(t, host, late, -1)
+
+	// Parity alone is a weak witness for the barrier half. Applying a re-derived
+	// crossing one lead early only moves the compared surface once an FSM deadline
+	// falls inside that lead, which takes a run several times longer than this one —
+	// and how soon the reproduction re-derives its first crossing at all is a
+	// property of the seed. So the barrier is asserted directly instead: this
+	// instance holds no link and never has, and its own crossing must still wait the
+	// session's playout lead rather than applying where it was produced.
+	//
+	// Ordered last: it moves a shared cursor, so it runs after the comparison.
+	var cursor core.Entity
+	late.World().RunSafe(func() { cursor = late.World().Resources.Player.Slot(0) })
+	start := cursorPosition(late, cursor)
+	want := start
+	want.X = start.X + 1
+	late.Context().PushCrossing(event.EventCursorMoveRequest,
+		&event.CursorMoveRequestPayload{Entity: cursor, X: want.X, Y: want.Y})
+	late.Settle()
+	for i := range parameter.NetworkBarrierDelayTicks {
+		if got := cursorPosition(late, cursor); got != start {
+			t.Fatalf("the reproduction applied its crossing at lead tick %d: %#v", i, got)
+		}
+		late.Tick(1)
+	}
+	late.Tick(1)
+	if got := cursorPosition(late, cursor); got != want {
+		t.Fatalf("the reproduction's crossing position = %#v, want %#v", got, want)
+	}
+}
 
 // runningHost builds one participant, journals it into a retained log, and drives it
 // for the given number of steps so a joiner has something to catch up to.
@@ -46,10 +151,7 @@ func runningHost(t *testing.T, seed uint64, steps int) (*App, *Capture) {
 // byte-identical shared state is what says the reproduction was exact.
 func TestLateJoinerReplaysTheSessionToTheHostPosition(t *testing.T) {
 	const seed = 0x5EEDBEEF
-	steps := 300
-	if testing.Short() {
-		steps = 60
-	}
+	steps := soakScale(60, 150, 300)
 
 	host, log := runningHost(t, seed, steps)
 	records, at := host.SessionLog()
