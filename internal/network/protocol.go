@@ -32,6 +32,10 @@ const (
 	MsgStart     MessageType = 0x24 // Live: host releases the participants into tick zero
 	MsgReady     MessageType = 0x25 // Live: joiner confirms it received the start gate
 
+	// Catch-up. A participant arriving after tick zero reproduces the session from
+	// the host's record log, which is unbounded and so crosses as chunks.
+	MsgSessionLog MessageType = 0x26 // Live: one chunk of the host's replayable log
+
 	// Reserved, unused: explicit connect and acknowledgement control, which the
 	// stream's own lifecycle carries today; roster and coordinator assignment beyond
 	// the startup offer; and authentication.
@@ -46,6 +50,10 @@ const (
 // Header precedes every message on the wire
 // Fixed 12 bytes: [Type:1][Flags:1][Seq:4][Ack:4][Len:2]
 const HeaderSize = 12
+
+// MaxPayloadSize is what the header's 16-bit length field can describe. Anything
+// larger than this has to be split by its producer; see event.EncodeSessionLog.
+const MaxPayloadSize = 65535
 
 // Header flags
 const (
@@ -66,7 +74,7 @@ type Message struct {
 // Encode writes the message to a writer with length prefix
 func (m *Message) Encode(w io.Writer) error {
 	payloadLen := len(m.Payload)
-	if payloadLen > 65535 {
+	if payloadLen > MaxPayloadSize {
 		return errors.New("payload exceeds maximum size")
 	}
 

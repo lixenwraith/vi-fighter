@@ -214,7 +214,7 @@ func (s *NetworkSystem) Init() {
 	s.epochs = [parameter.MaxPlayers + 1]epochWindow{}
 	s.productionEpoch = s.world.Resources.Game.State.GetGameTicks() + 1
 	s.crossSeq = 0
-	s.localSource = 1
+	s.localSource = 0
 	s.delayTicks = parameter.NetworkBarrierDelayTicks
 	if r := s.world.Resources.Network; r != nil {
 		s.localSource = r.ParticipantID
@@ -247,6 +247,7 @@ func (s *NetworkSystem) EventTypes() []event.EventType {
 	return []event.EventType{
 		event.EventMetaSystemCommandRequest,
 		event.EventGameResetRequest,
+		event.EventParticipantJoined,
 		event.EventParticipantDeparted,
 	}
 }
@@ -259,11 +260,62 @@ func (s *NetworkSystem) HandleEvent(ev event.GameEvent) {
 		if p, ok := ev.Payload.(*event.MetaSystemCommandPayload); ok && p.SystemName == s.Name() {
 			s.enabled = p.Enabled
 		}
+	case event.EventParticipantJoined:
+		if p, ok := ev.Payload.(*event.ParticipantJoinedPayload); ok {
+			s.addParticipant(p)
+		}
 	case event.EventParticipantDeparted:
 		if p, ok := ev.Payload.(*event.ParticipantDepartedPayload); ok {
 			s.removeParticipant(p)
 		}
 	}
+}
+
+// addParticipant applies the arrival crossing. Every instance runs it at the same
+// apply tick, so the cursor it creates takes the same shared entity everywhere (D-11)
+// — which is the reason a mid-run arrival cannot be a local reaction to a connect.
+// The instance the payload names is the one that goes on to simulate it.
+func (s *NetworkSystem) addParticipant(p *event.ParticipantJoinedPayload) {
+	if int(p.Slot) >= parameter.MaxPlayers || s.world.Resources.Player.Slot(p.Slot) != 0 {
+		return
+	}
+	control := component.ControlRemote
+	if p.Participant == s.participantID() {
+		control = component.ControlHuman
+	}
+	s.world.PushEvent(event.EventCursorSpawnRequest, &event.CursorSpawnRequestPayload{
+		Slot: p.Slot, Center: true, Control: uint8(control), PeerID: p.Participant,
+	})
+	if control == component.ControlHuman {
+		s.world.PushEvent(event.EventCursorSetLocalRequest, &event.CursorSetLocalPayload{Slot: p.Slot})
+	}
+	s.lastSync[p.Slot] = 0
+	if int(p.Participant) < len(s.departed) {
+		s.departed[p.Participant] = false
+	}
+}
+
+// participantID is this instance's canonical identity in the session.
+func (s *NetworkSystem) participantID() uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.localSource
+}
+
+// DiscardArtifactsThrough drops scheduled artifacts whose apply tick a replayed
+// session log has already covered. A participant catching up receives live epochs
+// while it replays, and everything they carry up to the log's end is in the records
+// it just applied; applying both would double every crossing in that window.
+func (s *NetworkSystem) DiscardArtifactsThrough(tick uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keep := s.scheduled[:0]
+	for _, a := range s.scheduled {
+		if a.applyTick > tick {
+			keep = append(keep, a)
+		}
+	}
+	s.scheduled = keep
 }
 
 // removeParticipant applies the departure crossing. It arrives at the same apply
@@ -426,7 +478,7 @@ func (s *NetworkSystem) announceDeparture(peerID uint32, from uint32) bool {
 		return true
 	}
 	if s.isCoordinator() {
-		s.world.PushCrossing(event.EventParticipantDeparted,
+		s.crossSession(event.EventParticipantDeparted,
 			&event.ParticipantDepartedPayload{Participant: peerID, Slot: slot})
 		return true
 	}
@@ -455,6 +507,14 @@ func (s *NetworkSystem) receiveDeparture(from uint32, body []byte) {
 	if !s.announceDeparture(p.Participant, from) {
 		s.statDuplicates.Add(1)
 	}
+}
+
+// crossSession pushes a roster change as a D-3 crossing carrying OriginSession, so
+// the record enters the replay journal. Nothing else in the stream implies a roster
+// change — it originates in a transport observation — and a participant catching up
+// by replaying that stream has to see it.
+func (s *NetworkSystem) crossSession(t event.EventType, payload any) {
+	s.world.PushEventFull(t, payload, event.OriginSession, core.DomainPlayer)
 }
 
 // isCoordinator reports whether this instance owns the session's first identity,
