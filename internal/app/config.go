@@ -8,6 +8,7 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/engine"
 	"github.com/lixenwraith/vi-fighter/internal/event"
 	"github.com/lixenwraith/vi-fighter/internal/network"
+	"github.com/lixenwraith/vi-fighter/internal/parameter"
 	"github.com/lixenwraith/vi-fighter/internal/vlog"
 )
 
@@ -124,6 +125,10 @@ type Config struct {
 	// simulation identity before the App is constructed.
 	JoinAddress string
 
+	// Participants is the lobby size a host waits for, itself included. Zero means
+	// two. The ceiling is parameter.MaxPlayers, which is also the roster width.
+	Participants int
+
 	// Width and Height are the terminal-equivalent dimensions a caller-driven run
 	// assumes; margins apply as usual, so the viewport is smaller than these.
 	// Ignored when the terminal owns geometry; zero selects the defaults.
@@ -170,6 +175,13 @@ func (c Config) Validate() error {
 	}
 	if (c.HostAddress != "" || c.JoinAddress != "") && c.Mode != ModePlay {
 		return fmt.Errorf("%s: network sessions require interactive play mode", c.Mode)
+	}
+	if c.Participants != 0 && (c.Participants < 2 || c.Participants > parameter.MaxPlayers) {
+		return fmt.Errorf("-players %d is outside the supported range 2..%d",
+			c.Participants, parameter.MaxPlayers)
+	}
+	if c.Participants != 0 && c.HostAddress == "" {
+		return errors.New("-players applies to -host")
 	}
 	if c.ForceDefault && (c.GameScript != "" || c.ContentPath != "") {
 		return errors.New("-d is mutually exclusive with -g and -f")

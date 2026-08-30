@@ -51,6 +51,9 @@ type App struct {
 	pendingJoin  *network.PendingJoin
 	sessionMu    sync.Mutex
 	sessionOffer network.SessionOffer
+	// sessionRoster is the lobby the coordinator has admitted so far. It grows one
+	// entry per accepted connection and closes into the offer the start gate sends.
+	sessionRoster []network.SessionParticipant
 }
 
 // New wires the runtime, releasing anything already started on failure
@@ -159,6 +162,9 @@ func (a *App) initWorld() {
 
 	// Service resources bridged into the ECS
 	a.hub.BindResources(a.world.Resources)
+	if r := a.world.Resources.Network; r != nil {
+		r.OnDeparture = a.releaseParticipant32
+	}
 
 	// The terminal supplies color whenever one exists, but dimensions only when the
 	// mode says so; a replay's come from the journal, via config
