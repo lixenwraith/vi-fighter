@@ -127,7 +127,14 @@ func ConfigFromAnchor(a event.JournalAnchor) (Config, error) {
 		return Config{}, errors.New("anchor carries no seed")
 	}
 
-	cfg := Config{Mode: ModeHeadless, Seed: a.Seed, Width: a.Width, Height: a.Height}
+	// The recorded map latch travels with the geometry it was derived from, so a
+	// reproduction installs it before the FSM boots rather than re-deriving it from
+	// the terminal the anchor names (D-14).
+	cfg := Config{
+		Mode: ModeHeadless, Seed: a.Seed, Width: a.Width, Height: a.Height,
+		MapWidth: a.MapWidth, MapHeight: a.MapHeight, CropOnResize: a.CropOnResize,
+		LockMap: a.SessionShared,
+	}
 
 	// Embedded on both sides is the only pairing Config states exactly; a mixed
 	// anchor leaves the embedded side to discovery, which VerifyAnchor then rejects
@@ -338,7 +345,7 @@ func (d *ReplayDriver) injectGroup(k groupKey) error {
 		if err != nil {
 			return fmt.Errorf("replay: jseq %d %s: %w", rec.JSeq, event.GetEventName(rec.Type), err)
 		}
-		d.a.ctx.PushEventFull(rec.Type, payload, rec.Origin, rec.Domain)
+		d.a.world.PushRecord(rec.Type, payload, rec.Origin, rec.Domain)
 		pushed++
 	}
 	if pushed > 0 {

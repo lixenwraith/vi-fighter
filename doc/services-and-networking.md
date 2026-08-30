@@ -143,7 +143,10 @@ different seed. The coordinator assigns canonical participant IDs and roster
 slots; both instances create the roster in slot order and mark only their own
 cursor human-controlled.
 
-The status bar shows `NET:WAIT/OPEN`, `NET:1P/LOCK`, or `NET:DOWN/OPEN`.
+The status bar shows `NET:WAIT/LOCK`, `NET:1P/LOCK`, or `NET:DOWN/LOCK`: the
+D-14 latch is a property of the run, not of the current peer count, so a session
+run keeps it from before its first joiner to after its last one leaves. `OPEN`
+belongs to a solo run, which is the only one whose terminal may still crop.
 The `network.session` debug card exposes state, peer count, connected state and
 map latch separately.
 
@@ -216,6 +219,11 @@ the socket. `NetworkService` contributes that port through `NetworkResource`.
 at tick close, `Flush` sends the closed production epoch. `Cross` withholds the
 local artifact so every participant applies it at the same fixed-delay boundary.
 The default lead is three 50 ms ticks and never waits for a per-tick round trip.
+The barrier is engaged for the life of a session run rather than while a peer is
+attached: the tick an artifact applies at is what a replay or a mid-run catch-up
+has to reach, and a reproduction holds no link. A journaled crossing is already
+stamped past the lead, so a replay republishes it directly; the crossings the
+simulation re-derives take the lead as the recorded run took it.
 `ActivateSession` closes the lobby-to-first-tick input window before the main loop
 reads terminal events. The game clock is frozen before FSM deadlines are created
 and released only after the common start gate, so the host's lobby wait cannot age
@@ -232,16 +240,22 @@ travels the same way, produced only by the coordinator so it has one apply tick.
 applied only when the payload's entity and roster slot agree and its sequence is
 newer than that slot's last. Disconnect drains through the same poll boundary,
 despawns only cursors owned by that participant, releases that slot's sync
-sequence, disables the barrier when no peer remains, and restores local map-size
-authority.
+sequence, and leaves both the barrier and the map latch in place: a session's
+playout lead and its bounds are properties of the run, so a stretch with no peer
+attached still defers its crossings by the same lead and still keeps the bounds
+every participant adopted. A departure is itself a crossing and lands at that lead
+rather than where the lost link was observed.
 
 At the same six-tick cadence, direct neighbours exchange a run/tick/hash sample
 over the exact `SnapshotShared` comparison surface, plus category hashes that
 identify position, kinetic, combat, context or status as the first differing
-surface. A mismatch logs once, increments `network.digest_mismatches`, and raises
-a red `DESYNC` status item; agreement after a mismatch shows green `SYNCED` for
-twenty ticks. The digest is a detector only: it does not flood, select an
-authority, repair state, or cross a partition.
+surface. Two consecutive mismatching samples log once, increment
+`network.digest_mismatches`, and raise an amber `DESYNC` status item;
+`NetworkDivergedSamples` of them publish `network.diverged`, log at error and turn
+it red `DIVERGED`. `network.sync_part` and `network.sync_tick` carry the first
+differing category and the tick it appeared on. Agreement after a mismatch shows
+green `SYNCED` for twenty ticks. The digest is a detector only: it does not flood,
+select an authority, repair state, or cross a partition.
 
 Loss that happens outside the barrier is published rather than swallowed, because
 either direction desynchronises silently: `network.transport_lost_in` counts
@@ -305,8 +319,10 @@ mismatch, log-transfer and encoding budgets have focused tests in
 
 Both sides should reach `NET:1P/LOCK`, display two cursors and agree on shared
 actors, scoring and progression while both participants move/type/fire; a healthy
-run never shows `DESYNC`. The host's `:new` resets both rosters and a guest's is
-refused. Quit one; the other must continue at `NET:DOWN/OPEN`. Add `-players <n>`
+run never shows `DESYNC`. Give the two terminals different sizes and resize one
+mid-run: the map must not move and neither side may desynchronise. The host's
+`:new` resets both rosters and a guest's is refused. Quit one; the other must
+continue at `NET:DOWN/LOCK`. Add `-players <n>`
 to the host for a larger lobby, which closes only once every participant has
 arrived. Bind the host to `:7777` for a LAN. Internet routing uses the same TCP
 path but is not safe for untrusted peers until authentication and TLS
