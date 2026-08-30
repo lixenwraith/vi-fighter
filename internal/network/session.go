@@ -61,14 +61,30 @@ func (o SessionOffer) Participant(id PeerID) (SessionParticipant, bool) {
 	return o.Participants[i], true
 }
 
-// HostAcceptor returns a pre-world handshake for Transport's accept loop.
-func HostAcceptor(offer func() (SessionOffer, error), timeout time.Duration) func(net.Conn) (PeerID, error) {
-	return func(conn net.Conn) (PeerID, error) {
-		o, err := offer()
+// Coordinator is the host side of the startup handshake. Assign allocates the next
+// participant identity and returns the offer carrying it; Release returns that
+// identity to the pool when the handshake does not complete, so a rejected or
+// abandoned connection does not consume a roster slot.
+type Coordinator struct {
+	Assign  func() (SessionOffer, error)
+	Release func(PeerID)
+}
+
+// HostAcceptor returns a pre-world handshake for Transport's accept loop. Each
+// accepted connection gets its own identity, so the roster grows with the lobby
+// rather than being fixed at two.
+func HostAcceptor(c Coordinator, timeout time.Duration) func(net.Conn) (PeerID, error) {
+	return func(conn net.Conn) (id PeerID, err error) {
+		o, err := c.Assign()
 		if err != nil {
 			return 0, err
 		}
-		if err := o.Validate(); err != nil {
+		defer func() {
+			if err != nil && c.Release != nil {
+				c.Release(o.Assigned)
+			}
+		}()
+		if err = o.Validate(); err != nil {
 			return 0, err
 		}
 		if timeout > 0 {
@@ -79,7 +95,7 @@ func HostAcceptor(offer func() (SessionOffer, error), timeout time.Duration) fun
 		if err != nil {
 			return 0, err
 		}
-		if err := NewMessage(MsgJoinOffer, body).Encode(conn); err != nil {
+		if err = NewMessage(MsgJoinOffer, body).Encode(conn); err != nil {
 			return 0, err
 		}
 		msg, err := Decode(conn)
@@ -90,11 +106,12 @@ func HostAcceptor(offer func() (SessionOffer, error), timeout time.Duration) fun
 			return 0, fmt.Errorf("join handshake: got message %#x, want reply", msg.Type)
 		}
 		var reply sessionReply
-		if err := json.Unmarshal(msg.Payload, &reply); err != nil {
+		if err = json.Unmarshal(msg.Payload, &reply); err != nil {
 			return 0, fmt.Errorf("join handshake reply: %w", err)
 		}
 		if reply.Error != "" {
-			return 0, errors.New(reply.Error)
+			err = errors.New(reply.Error)
+			return 0, err
 		}
 		return o.Assigned, nil
 	}
@@ -183,27 +200,42 @@ func (p *PendingJoin) Complete(joinErr error) error {
 	return err
 }
 
-// WaitStart waits for the host to finish its own roster setup.
-func (p *PendingJoin) WaitStart() error {
+// WaitStart waits for the host to close the lobby and returns the roster it closed
+// on. A joiner's own offer describes only the participants present when it arrived,
+// so the roster every instance builds from — and therefore shared creation order,
+// which D-11 requires to be identical — is this one, not the offer.
+//
+// The start gate carries no deadline: it is the host waiting for the rest of the
+// lobby, which is a human-paced wait with no bound worth guessing at. A lost host
+// surfaces as a stream error instead.
+func (p *PendingJoin) WaitStart() (SessionOffer, error) {
 	if !p.replied {
-		return errors.New("join handshake has no reply")
+		return SessionOffer{}, errors.New("join handshake has no reply")
 	}
 	if p.started {
-		return errors.New("join start gate already received")
-	}
-	if p.base.ConnectTimeout > 0 {
-		_ = p.conn.SetReadDeadline(time.Now().Add(p.base.ConnectTimeout))
-		defer p.conn.SetReadDeadline(time.Time{})
+		return SessionOffer{}, errors.New("join start gate already received")
 	}
 	msg, err := Decode(p.conn)
 	if err != nil {
-		return err
+		return SessionOffer{}, err
 	}
 	if msg.Type != MsgStart {
-		return fmt.Errorf("join handshake: got message %#x, want start", msg.Type)
+		return SessionOffer{}, fmt.Errorf("join handshake: got message %#x, want start", msg.Type)
 	}
+	var final SessionOffer
+	if err := json.Unmarshal(msg.Payload, &final); err != nil {
+		return SessionOffer{}, fmt.Errorf("join start roster: %w", err)
+	}
+	if err := final.Validate(); err != nil {
+		return SessionOffer{}, err
+	}
+	if final.Assigned != p.offer.Assigned {
+		return SessionOffer{}, fmt.Errorf("join start roster assigns participant %d, offered %d",
+			final.Assigned, p.offer.Assigned)
+	}
+	p.offer = final
 	p.started = true
-	return nil
+	return final, nil
 }
 
 // Ready releases the host and transfers stream ownership to TransportConfig.

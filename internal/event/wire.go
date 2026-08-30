@@ -86,11 +86,18 @@ type ScheduledWireFrame struct {
 }
 
 // WireBatch closes one participant's production epoch, including an empty one.
-// Source provides the canonical ordering key shared by every receiver.
+// Source provides the canonical ordering key shared by every receiver, and with
+// ProducedTick it names the epoch uniquely — which is what lets a receiver
+// recognise a copy that reached it by a second path through the mesh.
+//
+// Hops counts the links crossed so far. It bounds a relay loop; it is not what
+// terminates flooding, which is the receiver's per-source epoch window, and it is
+// deliberately not part of the artifact's identity.
 type WireBatch struct {
 	Frames       []ScheduledWireFrame `json:"frames,omitempty"`
 	ProducedTick uint64               `json:"produced_tick"`
 	Source       uint32               `json:"source"`
+	Hops         uint8                `json:"hops,omitempty"`
 }
 
 // NewWireFrame encodes one crossing; an unencodable payload reports why rather

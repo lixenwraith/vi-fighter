@@ -333,13 +333,13 @@ func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
 
 	a := mustHeadless(t, seed, 120, 40)
 	t.Cleanup(a.Close)
-	offer, err := a.hostOffer()
-	if err != nil {
-		t.Fatalf("host offer: %v", err)
-	}
+	// The lobby is not closed here: hostOffer closes it, and the coordinator has to
+	// allocate this run's guest identity from an open one.
 	hostCfg := network.DebugConfig(network.RoleHost, "127.0.0.1:0")
-	hostCfg.ParticipantID = offer.Host
-	hostCfg.AcceptSession = network.HostAcceptor(a.hostOffer, time.Second)
+	hostCfg.ParticipantID = hostParticipantID
+	hostCfg.AcceptSession = network.HostAcceptor(network.Coordinator{
+		Assign: a.assignParticipant, Release: a.releaseParticipant,
+	}, time.Second)
 	host := network.NewSocketPort(hostCfg)
 	t.Cleanup(func() { _ = host.Close() })
 	if err := host.Start(); err != nil {
@@ -365,9 +365,9 @@ func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
 	t.Cleanup(b.Close)
 	b.pendingJoin = pending
 	b.sessionOffer = offered
-	if err := b.JoinSession(offered); err != nil {
+	if err := b.Join(offered.Anchor); err != nil {
 		_ = pending.Complete(err)
-		t.Fatalf("join session: %v", err)
+		t.Fatalf("join identity: %v", err)
 	}
 	if err := pending.Complete(nil); err != nil {
 		t.Fatalf("join reply: %v", err)
@@ -435,9 +435,9 @@ func TestTwoLiveParticipantsStayInLockstepOverTCP(t *testing.T) {
 		t.Fatalf("retry app: %v", err)
 	}
 	defer retryApp.Close()
-	joinErr := retryApp.JoinSession(retryOffer)
+	joinErr := retryApp.Join(retryOffer.Anchor)
 	if !errors.Is(joinErr, ErrJoinMidRun) {
-		t.Fatalf("retry JoinSession() error = %v, want ErrJoinMidRun", joinErr)
+		t.Fatalf("retry Join() error = %v, want ErrJoinMidRun", joinErr)
 	}
 	if err := retry.Complete(joinErr); !errors.Is(err, ErrJoinMidRun) {
 		t.Fatalf("retry Complete() error = %v, want unchanged ErrJoinMidRun", err)
