@@ -141,7 +141,9 @@ func NewClockScheduler(
 		ctl:          ctl,
 		tickInterval: tickInterval,
 
-		gameStartTime: ctl.Now(),
+		// SimEpoch, not the pacing clock: elapsed game time is tick * interval on
+		// every instance, which is what makes time.game_elapsed_ms comparable.
+		gameStartTime: SimEpoch,
 
 		eventRouter: event.NewRouter(world.Resources.Event.Queue),
 
@@ -305,6 +307,37 @@ func (cs *ClockScheduler) RegisterEventHandler(handler event.Handler) {
 // system handlers see it, so a pooled payload is still the producer's. Harness-only:
 // set before Start, or any time on a driven App, never on a running scheduler.
 func (cs *ClockScheduler) SetDispatchTap(fn func(event.GameEvent)) { cs.tap = fn }
+
+// ExportFSM reads the FSM runtime's position for a D-19 capture: which state each
+// region stands in, how long it has stood there, the variables guards read, and
+// the delayed actions still pending. The state graph itself is configuration and
+// travels with the build.
+//
+// Caller MUST hold updateMutex: the machine is tick-owned.
+func (cs *ClockScheduler) ExportFSM() fsm.MachineState { return cs.fsm.Export() }
+
+// ImportFSM places the FSM runtime where a capture found it. Region entry actions
+// are deliberately not re-run: the capture describes a machine that has already
+// entered these states, and re-entering would emit everything that entry produced
+// a second time.
+//
+// Caller MUST hold updateMutex.
+func (cs *ClockScheduler) ImportFSM(state fsm.MachineState) error {
+	if err := cs.fsm.Import(cs.world, state); err != nil {
+		return err
+	}
+	// Region telemetry is derived from the position that just changed, and it is
+	// part of the compared shared surface. Republish it here rather than waiting
+	// for the next tick, so an installed world reports where it stands.
+	cs.publishRegionStats()
+	stateName, stateID, timeInState := cs.fsm.GetActiveRegionTelemetry()
+	cs.statFSMName.StoreIfChanged(stateName)
+	cs.statFSMElapsed.Store(int64(timeInState))
+	cs.statFSMMaxDur.Store(int64(cs.fsm.StateDurations[stateID]))
+	cs.statFSMIndex.Store(int64(cs.fsm.StateIndices[stateID]))
+	cs.statFSMTotal.Store(int64(cs.fsm.StateCount))
+	return nil
+}
 
 // LoadFSMFromFS initializes HFSM from a filesystem (embed.FS or os.DirFS)
 func (cs *ClockScheduler) LoadFSMFromFS(fsys fs.FS, entry string, registerComponents func(*fsm.Machine[*World])) error {
@@ -994,10 +1027,11 @@ func (cs *ClockScheduler) executeReset() {
 	cs.world.Resources.Event.Queue.ResetTelemetry()
 	cs.resetTelemetry()
 
-	// 3. Reset Scheduler internal timing
-	now := cs.ctl.Now()
-	cs.nextTickDeadline = now.Add(cs.tickInterval)
-	cs.gameStartTime = now
+	// 3. Reset Scheduler internal timing. The deadline is a pacing value and stays
+	// on the wall clock; the game-time origin is SimEpoch, because the tick counter
+	// the elapsed figure is derived from restarts with the run.
+	cs.nextTickDeadline = cs.ctl.Now().Add(cs.tickInterval)
+	cs.gameStartTime = SimEpoch
 
 	// 4. Reset FSM state - This will trigger OnEnter actions
 	if err := cs.fsm.Reset(cs.world); err != nil {
@@ -1075,11 +1109,15 @@ func (cs *ClockScheduler) processTick() {
 			cs.tickSlips++
 			cs.tickSlipPending = false
 		}
-		tickTime = cs.ctl.Now()
-
 		// The barrier applies against the completed tick's stamp. Its settle group
 		// therefore replays between ticks, before the next BeginTick resets Boundary.
 		tick := cs.world.Resources.Game.State.GetGameTicks() + 1
+
+		// The simulation instant is derived from the tick, never from the pacing
+		// clock: it is shared state, and every participant must read the same value
+		// at the same tick (SimEpoch). The pacing clock still decides *when* this
+		// tick runs, and RealTime below still reports the wall.
+		tickTime = SimTime(tick, cs.tickInterval)
 		if cs.world.Resources.Event.Queue.ReceiveWire(tick) > 0 {
 			cs.settleLocked("wire")
 		}
