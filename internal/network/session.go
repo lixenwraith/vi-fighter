@@ -24,7 +24,18 @@ type SessionOffer struct {
 	Assigned          PeerID               `json:"assigned"`
 	Participants      []SessionParticipant `json:"participants"`
 	BarrierDelayTicks uint64               `json:"barrier_delay_ticks"`
+
+	// SnapshotTick names the tick of the capture that follows the start gate, and
+	// SnapshotBytes its encoded length. A joiner reads them before the transfer so a
+	// stream that stops halfway is a failed join rather than a world installed from
+	// a prefix. Zero means the gate carries no capture, which is what an offer
+	// written by a build that predates this looks like.
+	SnapshotTick  uint64 `json:"snapshot_tick,omitempty"`
+	SnapshotBytes int    `json:"snapshot_bytes,omitempty"`
 }
+
+// CarriesSnapshot reports whether the start gate is followed by a capture.
+func (o SessionOffer) CarriesSnapshot() bool { return o.SnapshotBytes > 0 }
 
 type sessionReply struct {
 	Error string `json:"error,omitempty"`
@@ -125,7 +136,50 @@ type PendingJoin struct {
 	replied     bool
 	started     bool
 	transferred bool
+
+	// deferred holds the session traffic that arrived on this stream before the
+	// port owned it. A mid-run host admits a participant *before* it reads the
+	// world that participant will install, precisely so the epochs produced in
+	// between reach it; they arrive interleaved with the gate and the capture, and
+	// dropping them here would lose exactly the crossings the ordering exists to
+	// preserve.
+	deferred []*Message
 }
+
+// Deferred returns the session traffic read off the stream during the gate, oldest
+// first. Every frame came from the coordinator, which is the only peer this stream
+// has. Valid after Ready; the slice is not reused.
+func (p *PendingJoin) Deferred() []*Message { return p.deferred }
+
+// HostID names the coordinator on the other end of this stream.
+func (p *PendingJoin) HostID() PeerID { return p.offer.Host }
+
+// hold buffers one session frame that arrived out of the handshake's turn, and
+// reports whether it was one. Anything the handshake itself expects is left to the
+// caller, and an unrecognised type is a protocol error rather than something to
+// stash.
+func (p *PendingJoin) hold(msg *Message) bool {
+	switch msg.Type {
+	case MsgHeartbeat:
+		return true
+	case MsgEvent, MsgStateSync, MsgStateDigest, MsgDisconnect:
+		// Bounded, because this buffer is filled by the peer on the other end of the
+		// stream and drained only when the world arrives. The ceiling is far above
+		// the epochs a transfer can span — one per tick, and a transfer that took
+		// this many ticks has already failed the join's lag check — so reaching it
+		// means a sender that is not sending a capture. Dropping the oldest keeps
+		// the newest epochs, which are the ones the catch-up reads its target from.
+		if len(p.deferred) >= maxDeferredJoinFrames {
+			p.deferred = append(p.deferred[:0], p.deferred[1:]...)
+		}
+		p.deferred = append(p.deferred, msg)
+		return true
+	}
+	return false
+}
+
+// maxDeferredJoinFrames bounds what one join may buffer off its stream.
+const maxDeferredJoinFrames = 512
 
 // DialSession connects and receives the host's anchor before an App is built.
 func DialSession(addr string, cfg *Config) (*PendingJoin, SessionOffer, error) {
@@ -215,9 +269,15 @@ func (p *PendingJoin) WaitStart() (SessionOffer, error) {
 	if p.started {
 		return SessionOffer{}, errors.New("join start gate already received")
 	}
-	msg, err := Decode(p.conn)
-	if err != nil {
-		return SessionOffer{}, err
+	var msg *Message
+	for {
+		var err error
+		if msg, err = Decode(p.conn); err != nil {
+			return SessionOffer{}, err
+		}
+		if !p.hold(msg) {
+			break
+		}
 	}
 	if msg.Type != MsgStart {
 		return SessionOffer{}, fmt.Errorf("join handshake: got message %#x, want start", msg.Type)
@@ -236,6 +296,34 @@ func (p *PendingJoin) WaitStart() (SessionOffer, error) {
 	p.offer = final
 	p.started = true
 	return final, nil
+}
+
+// ReceiveSnapshot reads the capture the start gate announced.
+//
+// It follows MsgStart on the same stream rather than preceding it, because the
+// roster the gate closes on is what decides which cursors the capture must already
+// contain: the host configures its own roster, captures the world that produced,
+// and sends the two in that order.
+func (p *PendingJoin) ReceiveSnapshot() (uint64, []byte, error) {
+	if !p.started {
+		return 0, nil, errors.New("join start gate not received")
+	}
+	if !p.offer.CarriesSnapshot() {
+		return 0, nil, errors.New("join start gate carries no capture")
+	}
+	tick, body, err := readSnapshot(p, p.base.ReadTimeout)
+	if err != nil {
+		return 0, nil, fmt.Errorf("join snapshot: %w", err)
+	}
+	if tick != p.offer.SnapshotTick {
+		return 0, nil, fmt.Errorf("join snapshot: arrived for tick %d, gate named %d",
+			tick, p.offer.SnapshotTick)
+	}
+	if len(body) != p.offer.SnapshotBytes {
+		return 0, nil, fmt.Errorf("join snapshot: %d bytes arrived, gate named %d",
+			len(body), p.offer.SnapshotBytes)
+	}
+	return tick, body, nil
 }
 
 // Ready releases the host and transfers stream ownership to TransportConfig.

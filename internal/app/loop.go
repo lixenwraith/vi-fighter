@@ -62,6 +62,9 @@ func (a *App) Loop() error {
 	}
 	if a.cfg.HostAddress != "" || a.cfg.JoinAddress != "" {
 		a.activateNetworkSession()
+		if err := a.resumeJoinedSession(); err != nil {
+			return err
+		}
 		// Paused directly during construction, without emitting an operator event:
 		// the start gate is the authority that releases tick-zero game time.
 		a.ctx.TimeCtl.SetPaused(false)
