@@ -132,6 +132,10 @@ func (t *Transport) acceptLoop() {
 		}
 		if _, err := t.peers.AddConnectionAs(conn, id); err != nil {
 			t.report(err)
+			continue
+		}
+		if t.config.OnAdmit != nil {
+			t.config.OnAdmit(id)
 		}
 	}
 }
@@ -160,6 +164,12 @@ func (t *Transport) startClient() error {
 	}
 	return nil
 }
+
+// Connected reports whether one peer is still attached.
+func (t *Transport) Connected(id PeerID) bool { return t.peers.Connected(id) }
+
+// Disconnect drops one peer, reporting whether it was connected.
+func (t *Transport) Disconnect(id PeerID) bool { return t.peers.Disconnect(id) }
 
 // Addr returns the bound listener address, nil for a client or before Start.
 func (t *Transport) Addr() net.Addr {
