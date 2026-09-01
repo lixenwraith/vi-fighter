@@ -52,6 +52,11 @@ var denySharedPrefix = []string{
 	// Kill tallies mix shared species with the player-domain drain, so the total
 	// and the drain column move with this participant's own population
 	"kills.",
+	// What a capture cost this instance: a host publishes what reading the world
+	// took, a joiner publishes what installing it took, and the tick it installed
+	// at. None of it is a fact about the world the two now share — it is the
+	// measurement Phase 4's cadence gets chosen from.
+	"snapshot.",
 }
 
 // denySharedKey drops a single per-instance key from a group that is otherwise
@@ -65,13 +70,14 @@ var denySharedKey = map[string]bool{
 	// engine.SimTime derives it from the tick, so it is tick * interval on every
 	// instance, and comparing it is what pins the simulation clock deterministic.
 	"engine.tick_slips": true,
-	// Remaining time on the gold sequence. Deterministic since the simulation clock
-	// became tick-derived, but not yet comparable: the value is measured from the
-	// tick the sequence spawned on, and a joiner's FSM reaches MainSpawnGold one
-	// tick before the host's does, so the two carry origins one tick apart for the
-	// life of the sequence. Admitting this key is the check that closes that gap;
-	// it is an open item for Phase 3 (join anytime), not scheduler jitter.
-	"gold.timer": true,
+	// gold.timer is no longer here. Phase 2 excluded it because a joiner reproduced
+	// the session from tick zero and its FSM reached MainSpawnGold one tick before
+	// the host's, so the two carried deadline origins a tick apart for the life of
+	// the sequence. Phase 3 removed the reproduction: a joiner installs the host's
+	// world, and the gold carrier writes its deadlines relative to the capture's
+	// tick, so the origin is the host's on every instance. The key is compared, and
+	// what it now pins is exactly the defect it was excluded for.
+	//
 	// Whole-store counts, which sum both domains: a participant's own player-domain
 	// population moves them. The shared position digest covers the shared half.
 	"nav.entities": true,
@@ -155,6 +161,15 @@ var denySim = map[string]bool{
 	"stat.late":         true,
 	"stat.groups":       true,
 	"stat.metrics":      true,
+	// Wall-clock costs and the position a capture was installed at. A replay
+	// installs none and re-derives everything, so there is nothing here to compare.
+	"snapshot.capture_us":     true,
+	"snapshot.encode_us":      true,
+	"snapshot.bytes":          true,
+	"snapshot.stage_us":       true,
+	"snapshot.commit_us":      true,
+	"snapshot.install_tick":   true,
+	"snapshot.catch_up_ticks": true,
 }
 
 // Snapshot returns the sorted context and registry state as comparable lines.

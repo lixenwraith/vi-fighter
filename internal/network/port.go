@@ -78,6 +78,21 @@ func (p *SocketPort) BroadcastExcept(exclude uint32, msgType uint8, payload []by
 	}
 }
 
+// Connected reports whether one participant's stream is still attached. It answers
+// about that participant rather than about the session, which is what a join
+// waiting on one joiner needs: a peer count says nothing when others are present.
+func (p *SocketPort) Connected(peerID uint32) bool {
+	return p.transport.Connected(PeerID(peerID))
+}
+
+// Disconnect drops one participant's stream, reporting whether it was connected.
+// It is how a coordinator refuses a join that got as far as being admitted: a
+// participant left holding a handshake it could not finish would otherwise stay in
+// the session receiving crossings for a world it never installed.
+func (p *SocketPort) Disconnect(peerID uint32) bool {
+	return p.transport.Disconnect(PeerID(peerID))
+}
+
 // PeerCount reports the currently connected participants.
 func (p *SocketPort) PeerCount() int { return p.transport.PeerCount() }
 
@@ -114,6 +129,15 @@ func (p *SocketPort) Drain(dst []Inbound) int {
 		}
 	}
 	return n
+}
+
+// Inject replays a frame the join handshake read off the stream before this port
+// owned it. A mid-run joiner reads its start gate and its capture from the raw
+// connection, and the host's crossings arrive on the same stream in the meantime;
+// they are the epochs produced between admission and install, so they are held and
+// handed to the port here rather than dropped.
+func (p *SocketPort) Inject(peer uint32, msgType uint8, payload []byte) {
+	p.onMessage(PeerID(peer), NewMessage(MessageType(msgType), payload))
 }
 
 // Changes wakes startup coordination after connect, disconnect or ready.
