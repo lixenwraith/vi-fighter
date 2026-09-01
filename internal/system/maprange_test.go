@@ -37,6 +37,12 @@ var allowedMapRanges = map[string]string{
 	"Registry.buildIndex:byGroup":              "collects group names, sorted before index build",
 	"CleanerSystem.scanTargetRows:targetRows":  "collects rows, sorted before spawn",
 	"digestRecordDifference:Groups":            "collects differing record names, sorted before joining",
+	"RandResource.SaveStreams:streams":         "collects stream positions, sorted by domain and label before return",
+	"AdaptationResource.SaveState:Entries":     "collects gateway IDs, sorted before export",
+	"AdaptationResource.SaveState:Populations": "collects sub-types, sorted before export",
+	"NavigationSystem.SaveShared:groups":       "collects group IDs, sorted before export",
+	"Machine.Export:variables":                 "collects variable names, sorted before export",
+	"World.clearSharedEntities:componentMask":  "collects shared entities, sorted before removal",
 	"MacroManager.StartAllPlayback:buffers":    "collects labels, sorted before playback start",
 
 	// --- Writes target a map or distinct keys; order cannot change the result ---
@@ -57,14 +63,19 @@ var allowedMapRanges = map[string]string{
 	"NavigationSystem.Init:groups":                  "per-group resize; independent",
 	"NavigationSystem.HandleEvent:groups":           "per-group dirty flag; independent",
 	"NavigationSystem.Update:groups":                "per-group field update; recompute sum is commutative",
+	"Machine.Import:delayedActions":                 "clears every key; order cannot change an empty queue",
 
 	// --- Output re-sorted by a unique deterministic key ---
 	"MacroManager.Tick:active":         "output sorted by startOrder",
 	"MacroManager.ActiveLabels:active": "output sorted by startOrder",
 
 	// --- Detector false positive: parameter is a slice ---
-	"AdaptationSystem.applyEXP3:outcomes": "parameter is []routeOutcome, not the map field",
-	"FuseSystem.killDrains:drains":        "parameter is []core.Entity, not DustSystem's map field",
+	"AdaptationResource.LoadState:Entries":     "ranges []AdaptationEntryState, not the map field of the same name",
+	"AdaptationResource.LoadState:Populations": "ranges []RoutePopulationState, not the map field of the same name",
+	"NavigationSystem.LoadShared:Groups":       "ranges []navGroupPhase, not a map",
+	"Machine.Import:Regions":                   "ranges []RegionSnapshot, not the regions map",
+	"AdaptationSystem.applyEXP3:outcomes":      "parameter is []routeOutcome, not the map field",
+	"FuseSystem.killDrains:drains":             "parameter is []core.Entity, not DustSystem's map field",
 }
 
 type finding struct {
