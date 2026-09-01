@@ -66,6 +66,20 @@ type App struct {
 	// snapshotTelemetry is reserved during construction so a capture or an install
 	// can publish its cost into a registry that is frozen by then.
 	snapshotTelemetry snapshotTelemetry
+
+	// corrections is the authority half of a session: the host's publication
+	// cadence or a guest's apply loop, whichever this run turns out to be. It
+	// exists from construction and starts nothing until a transport is attached.
+	corrections *corrections
+
+	// staging is the second world a capture resolves into before it is written
+	// into this one, built on first use and re-used for the life of the run. Phase
+	// 3 built one per install and threw it away, which is 9 to 31 ms a correction
+	// cannot afford five times a second.
+	stageMu  sync.Mutex
+	staging  *App
+	stagingW int
+	stagingH int
 }
 
 // New wires the runtime, releasing anything already started on failure
@@ -77,6 +91,9 @@ func New(cfg Config) (*App, error) {
 	}
 
 	a := &App{cfg: cfg, hub: service.NewHub()}
+	// Before init, because initWorld binds the correction queue to whatever
+	// transport a service contributed and a peer can reach it from that moment.
+	a.corrections = newCorrections(a)
 	if a.cfg.HostAddress != "" && a.cfg.networkConfig == nil {
 		a.cfg.networkConfig = a.hostNetworkConfig()
 	}
@@ -182,6 +199,7 @@ func (a *App) initWorld() {
 	if r := a.world.Resources.Network; r != nil {
 		r.OnDeparture = a.releaseParticipant32
 		r.SharedDigest = a.sharedDigestLocked
+		r.OnCorrection = a.receiveCorrection
 		// A session endpoint exists, so this run is shared for its whole life
 		// whether or not a peer is attached at a given tick. Latching it here rather
 		// than reading the port keeps the anchor, the D-14 verdict and the playout
@@ -405,7 +423,11 @@ func (a *App) Close() {
 	if a.pendingJoin != nil {
 		_ = a.pendingJoin.Close()
 	}
+	if a.corrections != nil {
+		a.corrections.close()
+	}
 	a.closeMidRunPort()
+	a.closeStagingWorld()
 	a.hub.StopAll()
 
 	if a.recorder != nil {
