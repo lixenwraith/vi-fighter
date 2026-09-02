@@ -25,7 +25,11 @@ Implement Phase 6: **hash-guided selective correction plus bounded local replay*
 - Game guests keep simulating the Shared domain as predictors; do not turn them into
   thin clients.
 - Every instance simulates only its own Player domain. D-13 owner-authored cursor
-  state is transported separately and must not enter captures or selective repair.
+  state is transported separately, on its own sync stream. A capture does carry the
+  components — a joiner has to materialise a cursor it has never held — but the
+  receiver keeps its own values for the cursors it authors rather than adopting the
+  sender's mirror, and no component of a shared entity may name a player-domain
+  entity. Selective repair must not change either.
 - Ordinary locally produced crossings apply immediately. Remote peers retain the
   receive-side playout lead. Correctly typed shared gold members disappear locally
   before a tick.
@@ -122,8 +126,9 @@ Add focused tests that prove all of the following:
    then restores the exact root.
 3. Several mismatches in different sections are repaired without sending an
    unrelated section.
-4. Player-domain and D-13 owner-authored state never appears in manifests or
-   changes during selective apply.
+4. Player-domain state never appears in manifests, and neither it nor a
+   receiver-authored cursor's D-13 owner-authored set changes during selective
+   apply — including when the hashed surface disagrees over those cells for good.
 5. Reordered entity/store data cannot pass the integrity proof.
 6. Corrupt, stale, unknown-version, duplicate-conflicting and oversize shards are
    refused atomically.
