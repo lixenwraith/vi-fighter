@@ -167,8 +167,36 @@ func (a *App) sessionSummaryLocked() string {
 	if a.cfg.JoinAddress != "" {
 		addr, role = a.cfg.JoinAddress, "guest"
 	}
-	return fmt.Sprintf("Session %s %s, participant %d, %d peer(s), tick %d",
+	reg := a.world.Resources.Status
+	line := fmt.Sprintf("Session %s %s, participant %d, %d peer(s), tick %d",
 		role, addr, participant, peers, a.Position().Tick)
+
+	// The operating point, read from the published cells rather than from the
+	// scheduler itself. This runs under the world lock and the scheduler takes it
+	// on the other side of its own — a capture is a world read — so reading the
+	// atomics is not a shortcut here, it is the only order that cannot deadlock.
+	cadence := reg.Ints.Get("snapshot.cadence_ticks").Load()
+	if cadence == 0 {
+		return line
+	}
+	state := "nominal"
+	switch {
+	case reg.Bools.Get("snapshot.cadence_floor_breached").Load():
+		state = "BELOW THE CONVERGENCE FLOOR"
+	case reg.Bools.Get("snapshot.cadence_constrained").Load():
+		state = "constrained"
+	}
+	return line + fmt.Sprintf(
+		"; cadence %d ticks, keyframe every %d (%d ticks), link %d ms ±%d, %d B/s, uplink %d B/s, floor %d B/s, %s",
+		cadence,
+		reg.Ints.Get("snapshot.cadence_keyframe_interval").Load(),
+		reg.Ints.Get("snapshot.cadence_keyframe_period_ticks").Load(),
+		reg.Ints.Get("network.link_rtt_ms").Load(),
+		reg.Ints.Get("network.link_jitter_ms").Load(),
+		reg.Ints.Get("network.link_bps").Load(),
+		reg.Ints.Get("snapshot.cadence_uplink_bps").Load(),
+		reg.Ints.Get("snapshot.cadence_floor_bps").Load(),
+		state)
 }
 
 // releaseMidRunJoiner completes the gate for a participant the accept loop has
@@ -243,12 +271,23 @@ func (a *App) sendMidRunGate(port *network.SocketPort, id network.PeerID) error 
 	if !port.Send(uint32(id), uint8(network.MsgStart), start) {
 		return fmt.Errorf("could not release participant %d", id)
 	}
+	// The transfer is the measurement, so it is timed from the first chunk to the
+	// joiner's confirmation. Nothing else on a fresh link has pushed enough bytes
+	// to say what it carries.
+	transferStart := time.Now() // [wall] a link measurement, not a game clock
 	for i, chunk := range chunks {
 		if !port.Send(uint32(id), uint8(network.MsgStateSnapshot), chunk) {
 			return fmt.Errorf("could not send capture chunk %d/%d", i+1, len(chunks))
 		}
 	}
 	if err := a.awaitJoinerReady(port, id, ready); err != nil {
+		return err
+	}
+	// Refused *after* the install rather than before it, because the install is
+	// what completes the measurement. A participant refused here is dropped by the
+	// caller and its identity returned to the pool, which is the same unwind a
+	// join that could not finish its gate takes.
+	if err := a.admitLink(port, id, len(body), time.Since(transferStart)); err != nil {
 		return err
 	}
 
