@@ -342,11 +342,27 @@ func (a *App) writeShared(cap SharedCapture, reconcile bool) (engine.WorldDiffer
 	a.world.RunSafe(func() {
 		// Dry run first: a carrier that rejects its record must do so before the
 		// stores are touched.
+		//
+		// Two questions, and the second is the one a staging pass cannot answer. A
+		// capture naming a system this build does not run is a build mismatch, and
+		// any world would say so. A capture a carrier refuses because of state the
+		// *live* world holds — a genetic registry whose species set this instance
+		// entered a level ahead of the authority to reach — is invisible to a
+		// staging world that has never been in that state, so it would arrive as a
+		// failure after the store pass had already rewritten everything. Asking the
+		// live carrier here is what keeps the refusal atomic.
 		savers := a.sharedStateSaversLocked()
 		for _, rec := range cap.Systems {
-			if _, ok := savers[rec.System]; !ok {
+			saver, ok := savers[rec.System]
+			if !ok {
 				err = fmt.Errorf("capture names system %q, which this build does not run", rec.System)
 				return
+			}
+			if checker, ok := saver.(engine.SharedStateChecker); ok {
+				if e := checker.CheckShared(rec.Data); e != nil {
+					err = fmt.Errorf("refuse %s: %w", rec.System, e)
+					return
+				}
 			}
 		}
 
@@ -460,19 +476,30 @@ func (a *App) VerifyCapture(cap SharedCapture) error {
 		return errors.New("capture integrity hash does not match its body")
 	}
 
-	an := event.JournalAnchor{
-		Schema:        cap.Header.JournalSchema,
-		Seed:          cap.Header.Seed,
-		Session:       cap.Header.Session,
-		ConfigID:      cap.Header.ConfigID,
-		ContentID:     cap.Header.ContentID,
-		ContentPin:    cap.Header.ContentPin,
-		ContentFiles:  cap.Header.ContentFiles,
-		ContentBlocks: cap.Header.ContentBlocks,
-		ContentLines:  cap.Header.ContentLines,
-		TickInterval:  int64(cap.Header.TickInterval),
+	return firstAnchorMismatch("capture", a.anchorIdentity(captureAnchor(cap.Header)))
+}
+
+// captureAnchor is the identity half of a capture header, in the shape the journal
+// anchor comparison takes.
+//
+// It is a function rather than an inline literal because a header now reaches that
+// comparison from two places: a whole capture, which carries its own body and is
+// verified with it, and a correction manifest, which carries the header alone and
+// has to answer "is this my session" before this instance reads its own world to
+// compare against it.
+func captureAnchor(h CaptureHeader) event.JournalAnchor {
+	return event.JournalAnchor{
+		Schema:        h.JournalSchema,
+		Seed:          h.Seed,
+		Session:       h.Session,
+		ConfigID:      h.ConfigID,
+		ContentID:     h.ContentID,
+		ContentPin:    h.ContentPin,
+		ContentFiles:  h.ContentFiles,
+		ContentBlocks: h.ContentBlocks,
+		ContentLines:  h.ContentLines,
+		TickInterval:  int64(h.TickInterval),
 	}
-	return firstAnchorMismatch("capture", a.anchorIdentity(an))
 }
 
 // captureIntegrity hashes a capture's body with its header's own integrity field
