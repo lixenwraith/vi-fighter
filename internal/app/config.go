@@ -38,10 +38,15 @@ const (
 	// Geometry is the script's, so a presented run and a headless one simulate the
 	// same world and only the presentation differs.
 	ModeScript
+	// ModeServer is a dedicated host: the interactive runtime with no terminal, no
+	// renderer, no audio and no local cursor. It runs the real clock and the
+	// scheduler goroutine like ModePlay, because a session's simulation has to
+	// advance whether or not anybody is watching it here.
+	ModeServer
 )
 
 // modeNames indexes Mode for diagnostics
-var modeNames = [...]string{"play", "headless", "replay", "script"}
+var modeNames = [...]string{"play", "headless", "replay", "script", "server"}
 
 // String returns the diagnostic name
 func (m Mode) String() string {
@@ -56,7 +61,11 @@ func (m Mode) Presents() bool { return m == ModePlay || m == ModeReplay || m == 
 
 // Driven reports whether the caller advances the clock; a driven run spawns no
 // scheduler goroutine, so nothing races the world lock
-func (m Mode) Driven() bool { return m != ModePlay }
+func (m Mode) Driven() bool { return m != ModePlay && m != ModeServer }
+
+// Serves reports whether the mode is a dedicated host: it authors a session and
+// puts no cursor of its own on the map.
+func (m Mode) Serves() bool { return m == ModeServer }
 
 // OwnsGeometry reports whether the terminal is the authority on world dimensions.
 // A replay's geometry is recorded, so its terminal drives presentation only.
@@ -133,6 +142,9 @@ type Config struct {
 	// Participants is the lobby size a host waits for, itself included. A startup
 	// host treats zero as two; a solo run opened later with :host treats zero as
 	// parameter.MaxPlayers. The ceiling is also the roster width.
+	//
+	// ModeServer is the exception, because it is not one of them: there the value
+	// is the number of guests the session waits for, and zero means one.
 	Participants int
 
 	// Width and Height are the terminal-equivalent dimensions a caller-driven run
@@ -218,13 +230,20 @@ func (c Config) Validate() error {
 		switch {
 		case c.Mode == ModeReplay:
 			return fmt.Errorf("%s: journal playback cannot join a network session", c.Mode)
-		case c.Mode != ModePlay && !c.scriptedSession:
+		case c.Mode != ModePlay && !c.Mode.Serves() && !c.scriptedSession:
 			return fmt.Errorf("%s: network sessions require app.RunScript", c.Mode)
 		}
 	}
-	if c.Participants != 0 && (c.Participants < 2 || c.Participants > parameter.MaxPlayers) {
-		return fmt.Errorf("-players %d is outside the supported range 2..%d",
-			c.Participants, parameter.MaxPlayers)
+	minParticipants := 2
+	if c.Mode.Serves() {
+		minParticipants = 1 // a dedicated host is not one of them
+	}
+	if c.Participants != 0 && (c.Participants < minParticipants || c.Participants > parameter.MaxPlayers) {
+		return fmt.Errorf("-players %d is outside the supported range %d..%d",
+			c.Participants, minParticipants, parameter.MaxPlayers)
+	}
+	if c.Mode.Serves() && c.HostAddress == "" {
+		return errors.New("server: a dedicated host needs a bind address")
 	}
 	if c.Participants != 0 && c.JoinAddress != "" {
 		return errors.New("-players configures a host, not a joining guest")
@@ -250,8 +269,8 @@ func (c Config) Validate() error {
 	return c.validateDriven()
 }
 
-// validateDriven rejects settings a caller-driven run cannot honour, rather than
-// accepting a flag that would silently do nothing
+// validateDriven rejects settings a run without its own terminal cannot honour,
+// rather than accepting a flag that would silently do nothing
 func (c Config) validateDriven() error {
 	if c.ColorModeSet && !c.Mode.Presents() {
 		return fmt.Errorf("%s: color mode is unused, no terminal is created", c.Mode)
@@ -266,11 +285,15 @@ func (c Config) validateDriven() error {
 	// script reads the same field as its wall pace, which is a property of the run
 	// rather than of the clock; every other driven mode has nothing to do with it.
 	if c.TimeScaleSpec != "" {
-		if !c.scriptedSession {
+		switch {
+		case c.scriptedSession:
+			if _, _, err := scriptPacing(c); err != nil {
+				return err
+			}
+		case c.Mode.Serves():
+			return fmt.Errorf("%s: a dedicated host runs at the session's rate", c.Mode)
+		default:
 			return fmt.Errorf("%s: the manual clock is driven by Tick, not by a rate", c.Mode)
-		}
-		if _, _, err := scriptPacing(c); err != nil {
-			return err
 		}
 	}
 	// Matches what MetaSystem admits, so a live journal always rebuilds a valid config
