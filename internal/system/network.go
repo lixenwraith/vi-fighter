@@ -79,17 +79,18 @@ type NetworkSystem struct {
 	statDuplicates     *atomic.Int64
 	statDigestMismatch *atomic.Int64
 
-	digestHistory   [parameter.NetworkEpochWindow]stateDigest
-	pendingDigest   [parameter.MaxPlayers + 1]stateDigest
-	statDriftPart   *status.AtomicString
-	statDriftTick   *atomic.Int64
-	statPreInstall  *atomic.Int64
-	statJoinLag     *atomic.Int64
-	statLag         *atomic.Int64
-	statStale       *atomic.Bool
-	statLocalNow    *atomic.Int64
-	statCorrections *atomic.Int64
-	statForged      *atomic.Int64
+	digestHistory      [parameter.NetworkEpochWindow]stateDigest
+	pendingDigest      [parameter.MaxPlayers + 1]stateDigest
+	statDriftPart      *status.AtomicString
+	statDriftTick      *atomic.Int64
+	statPreInstall     *atomic.Int64
+	statAgreedRestored *atomic.Int64
+	statJoinLag        *atomic.Int64
+	statLag            *atomic.Int64
+	statStale          *atomic.Bool
+	statLocalNow       *atomic.Int64
+	statCorrections    *atomic.Int64
+	statForged         *atomic.Int64
 
 	// The link measurement, published for the worst peer this instance has. It is
 	// the transport's own estimate rather than anything this system derives: what
@@ -131,6 +132,20 @@ type NetworkSystem struct {
 	suffixBytes   int
 	lostTick      uint64
 	suffixDropped int64
+
+	// agreed is the bounded set of barrier-bound artifacts this instance has
+	// already applied and whose apply tick a correction may still predate.
+	//
+	// The suffix above answers "what did this participant do that the authority
+	// has not described yet"; this answers the same question for the three
+	// artifacts nobody replays. An arrival applies at one agreed tick on every
+	// instance, but a guest running ahead applies it before the authority's next
+	// capture contains it — and installing that capture then undoes the arrival
+	// with nothing left to put it back, because the scheduled copy was consumed
+	// when it applied. The membership test is the barrier's own: an artifact whose
+	// apply tick is past the installed world's tick is not in that world, so it is
+	// scheduled again rather than lost.
+	agreed []barrierArtifact
 
 	// Last reported transport loss, so a new one is logged once rather than per tick.
 	lastLostIn  uint64
@@ -311,6 +326,7 @@ func NewNetworkSystem(world *engine.World) engine.System {
 	s.statDriftPart = s.textStat(reg, "network.drift_part")
 	s.statDriftTick = s.intStat(reg, "network.drift_tick")
 	s.statPreInstall = s.intStat(reg, "network.artifacts_pre_install")
+	s.statAgreedRestored = s.intStat(reg, "network.artifacts_restored")
 	s.statJoinLag = s.intStat(reg, "network.join_lag_ticks")
 	s.statLag = s.intStat(reg, "network.lag_ticks")
 	s.statStale = s.boolStat(reg, "network.stale")
@@ -363,6 +379,7 @@ func (s *NetworkSystem) Init() {
 	s.mu.Lock()
 	s.crossings = s.crossings[:0]
 	s.scheduled = s.scheduled[:0]
+	s.agreed = s.agreed[:0]
 	s.epochs = [parameter.MaxPlayers + 1]epochWindow{}
 	s.snapshotFloor = 0
 	s.productionEpoch = s.world.Resources.Game.State.GetGameTicks() + 1
@@ -617,6 +634,28 @@ func (s *NetworkSystem) retainLocked(frame event.WireFrame, produced, applyTick 
 	}
 }
 
+// retainAgreed records one applied barrier-bound artifact, so an install that
+// rebases this instance behind its apply tick can put it back.
+//
+// The set is bounded by the roster rather than by a byte budget: the three
+// artifacts are an arrival, a departure and a reset, and a session produces one
+// per participant plus a reset. AdoptSnapshot prunes it by the same membership
+// test that prunes the scheduled queue, so it holds only what a correction could
+// still undo; the cap is what stops a session that installs nothing from growing
+// it without end.
+func (s *NetworkSystem) retainAgreed(a barrierArtifact) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agreed = append(s.agreed, a)
+	if n := len(s.agreed); n > maxAgreedRetained {
+		s.agreed = append(s.agreed[:0], s.agreed[n-maxAgreedRetained:]...)
+	}
+}
+
+// maxAgreedRetained bounds the applied barrier-bound artifacts kept for an
+// install to restore: every participant's arrival and departure, plus a reset.
+const maxAgreedRetained = 2*parameter.MaxPlayers + 1
+
 // LocalReplaySuffix returns this instance's own crossings produced after the
 // correction's baseline, in the order the session applies them.
 //
@@ -736,6 +775,24 @@ func (s *NetworkSystem) AdoptSnapshot(tick uint64) {
 		s.suffixBytes += rec.bytes
 	}
 	s.suffix = pruned
+	// The agreed artifacts the installed world predates go back on the schedule.
+	// Their effect is not in the capture — the membership test is the same one two
+	// lines up — and nothing else would ever re-apply them: the scheduled copy was
+	// consumed when they applied, and the replay suffix deliberately never retains
+	// one. A guest that ran ahead of the authority would otherwise lose an arrival
+	// permanently to a correction taken a tick before it.
+	restored := s.agreed[:0]
+	for _, a := range s.agreed {
+		if a.applyTick <= tick {
+			continue
+		}
+		restored = append(restored, a)
+		s.scheduled = append(s.scheduled, a)
+	}
+	s.agreed = restored
+	if len(restored) > 0 {
+		s.statAgreedRestored.Add(int64(len(restored)))
+	}
 	s.snapshotFloor = tick
 	s.productionEpoch = tick + 1
 	if r := s.world.Resources.Network; r != nil {
@@ -968,17 +1025,28 @@ func (s *NetworkSystem) drainWith(p engine.NetworkPort, poll func([]network.Inbo
 // game guest: simulation continues from the last authoritative state, but the
 // current membership protocol does not coordinate that local fork with other peers.
 func (s *NetworkSystem) reportDisconnect(peerID uint32, remaining int) {
-	coordinatorLost := peerID == coordinatorParticipant && !s.isCoordinator()
+	authorityLost := peerID == s.authorityParticipant() && !s.isCoordinator()
 	message := fmt.Sprintf("Participant %d disconnected", peerID)
-	if coordinatorLost {
+	if authorityLost {
+		// The badge and the message are the fallback's, and the session layer may
+		// clear both: a succession that finds an eligible successor ends with an
+		// authority rather than a fork. What it may not do is leave the loss
+		// unsaid while it tries, so the honest state is published first and
+		// withdrawn only once a handoff has actually been adopted.
 		s.statHostLost.Store(true)
 		message = "Host connection lost; continuing locally from the last authoritative state"
+	}
+	// Every departure reaches the session layer, not only the authority's: a
+	// survivor's own reach is what the succession rule counts, and it changes
+	// whenever any link does.
+	if r := s.world.Resources.Network; r != nil && r.OnPeerLost != nil {
+		r.OnPeerLost(peerID)
 	}
 	s.world.PushLocal(event.EventMetaStatusMessageRequest, &event.MetaStatusMessagePayload{
 		Message: message, Duration: 4 * parameter.StatusMessageDefaultTimeout, DurationOverride: true,
 	})
 	vlog.Warn("app", "msg", "network peer disconnected", "participant", s.participantID(), "peer", peerID,
-		"coordinator_lost", coordinatorLost, "remaining_peers", remaining)
+		"authority_lost", authorityLost, "remaining_peers", remaining)
 }
 
 func (s *NetworkSystem) forgetDigestPeer(peer uint32) {
@@ -1062,12 +1130,30 @@ func (s *NetworkSystem) crossSession(t event.EventType, payload any) {
 	s.world.PushEventFull(t, payload, event.OriginSession, core.DomainPlayer)
 }
 
-// isCoordinator reports whether this instance owns the session's first identity,
-// which is the one the handshake always assigns to the host.
+// isCoordinator reports whether this instance is the one currently authoring the
+// Shared world.
+//
+// It used to be "does this instance own the session's first identity", because
+// that is the identity the handshake assigns to the host and the host authored
+// for the life of the session. A handoff moves authorship, so the question moves
+// with it: the roster artifacts only one producer may raise follow the authority,
+// not the participant that opened the session.
 func (s *NetworkSystem) isCoordinator() bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.localSource == coordinatorParticipant
+	local := s.localSource
+	s.mu.Unlock()
+	return local != 0 && local == s.authorityParticipant()
+}
+
+// authorityParticipant is the participant currently authoring, defaulting to the
+// session's first identity for a transport that carries no authority yet.
+func (s *NetworkSystem) authorityParticipant() uint32 {
+	if r := s.world.Resources.Network; r != nil {
+		if id := r.Authority.Load(); id != 0 {
+			return id
+		}
+	}
+	return coordinatorParticipant
 }
 
 // participantSlot finds the roster slot a peer-owned cursor occupies.
@@ -1140,8 +1226,11 @@ func (s *NetworkSystem) dispatchMessage(from uint32, msg *network.Message) int {
 		s.receiveDeparture(from, msg.Payload)
 	case network.MsgStateCorrection:
 		s.receiveCorrection(from, msg.Payload)
-	case network.MsgStateManifest, network.MsgStateRequest, network.MsgStateShard:
+	case network.MsgStateManifest, network.MsgStateRequest, network.MsgStateShard,
+		network.MsgStateUnserved:
 		s.receiveSelective(msg.Type, from, msg.Payload)
+	case network.MsgAuthorityReport, network.MsgAuthorityVote, network.MsgAuthorityHandoff:
+		s.receiveAuthority(msg.Type, from, msg.Payload)
 	default:
 		s.statDrop.Add(1)
 	}
@@ -1196,17 +1285,18 @@ func (s *NetworkSystem) receiveCorrection(from uint32, body []byte) {
 	}
 }
 
-// receiveSelective hands one Phase 6 manifest, request or repair to the session
-// layer.
+// receiveSelective hands one selective-correction frame to the session layer: a
+// manifest, a receiver's answer to one, the repair that answers that, or the
+// refusal a retention holder gives when it cannot produce one.
 //
-// None of the three is relayed, and that is deliberate rather than an omission.
-// All three are one exchange between an authority and a receiver that can answer
-// it: a manifest forwarded to a participant whose reply cannot get back would
-// arrive as a question nobody can act on, and a request or a repair forwarded to a
-// peer that did not ask would deliver a page vector it holds no retention for. The
-// authority publishes the index only when every participant is directly linked and
-// keeps the Phase 5 stream otherwise, so a relayed participant is never left
-// holding an index it cannot use — see corrections.everyParticipantIsDirect.
+// None of the four is relayed *here*, and that is deliberate rather than an
+// omission. The transport's flood forwards what it admitted, which is the right
+// rule for an artifact everyone needs and the wrong one for an exchange: a request
+// or a repair forwarded to a peer that did not ask would deliver a page vector it
+// holds no retention for. Forwarding a manifest is a decision about retention —
+// only a participant that can answer for the tick it names may pass the question
+// on — so it is made in the session layer, which is what holds the ring. See
+// corrections.forwardManifest and corrections.canAnswerEveryParticipant.
 func (s *NetworkSystem) receiveSelective(kind network.MessageType, from uint32, body []byte) {
 	if from == 0 {
 		s.statDrop.Add(1)
@@ -1214,6 +1304,24 @@ func (s *NetworkSystem) receiveSelective(kind network.MessageType, from uint32, 
 	}
 	if r := s.world.Resources.Network; r != nil && r.OnSelective != nil {
 		r.OnSelective(uint8(kind), from, body)
+	}
+}
+
+// receiveAuthority hands one succession frame to the session layer.
+//
+// Unlike the selective exchange these are flooded rather than unicast, and the
+// flood is the point: a survivor two links from the lost authority learns of the
+// loss from the reports that cross it, because the departure crossing that used
+// to carry that news is produced by the authority — the thing that is gone. The
+// session layer decides what to relay onward, because it is what deduplicates by
+// term and participant.
+func (s *NetworkSystem) receiveAuthority(kind network.MessageType, from uint32, body []byte) {
+	if from == 0 {
+		s.statDrop.Add(1)
+		return
+	}
+	if r := s.world.Resources.Network; r != nil && r.OnAuthority != nil {
+		r.OnAuthority(uint8(kind), from, body)
 	}
 }
 
@@ -1512,7 +1620,7 @@ func (s *NetworkSystem) applyDue(nextTick uint64) int {
 			s.statDrop.Add(1)
 			continue
 		}
-		if !admissibleFromSource(et, a.source) {
+		if !s.admissibleFromSource(et, a.source) {
 			s.statForged.Add(1)
 			vlog.Warn("app", "msg", "artifact refused",
 				"peer", a.source, "event", event.GetEventName(et), "apply_tick", a.applyTick)
@@ -1529,6 +1637,9 @@ func (s *NetworkSystem) applyDue(nextTick uint64) int {
 		s.world.Resources.Event.Queue.PushReady(event.GameEvent{
 			Type: et, Payload: payload, Origin: a.origin, Domain: domain,
 		})
+		if barrierBound(et) {
+			s.retainAgreed(a)
+		}
 		if a.source == localSource {
 			local++
 		} else {
@@ -1560,10 +1671,10 @@ func (s *NetworkSystem) applyDue(nextTick uint64) int {
 // cursor, a peer replaying an artifact it never produced — is an *authentication*
 // question rather than an authority one, and this plan puts authentication in
 // Phase 6, before anything beyond trusted peers.
-func admissibleFromSource(et event.EventType, source uint32) bool {
+func (s *NetworkSystem) admissibleFromSource(et event.EventType, source uint32) bool {
 	switch et {
 	case event.EventParticipantJoined, event.EventParticipantDeparted:
-		return source == coordinatorParticipant
+		return source == s.authorityParticipant()
 	default:
 		return true
 	}
