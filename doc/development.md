@@ -114,8 +114,10 @@ useful CI addition even though the current workflow does not perform one.
 | `-script <file>` | Run a bounded authored TOML schedule; may be combined with `-host` or `-join`. |
 | `-watch` | Present a `-script` run on this terminal instead of running it headlessly. |
 | `-host <address>` | Bind a session, for example `:7777`. |
+| `-serve <address>` | Bind a headless session with no local player: a dedicated host. |
+| `-size <WxH>` | Terminal-equivalent geometry for a run with no terminal of its own, such as `-serve`. |
 | `-join <address>` | Join a session at `host:port`; the host supplies seed/config/content identity. |
-| `-players <n>` | Participants a `-host` lobby waits for, itself included; 2 by default, up to `parameter.MaxPlayers`. |
+| `-players <n>` | Participants a `-host` lobby waits for, itself included; 2 by default, up to `parameter.MaxPlayers`. With `-serve` it is the number of guests instead, because the server is not one of them. |
 | `-l` / `-log` | Enable structured logging; use `-l=DIR` for another directory. |
 | `-lv <level>` | `trace`, `debug`, `info`, `warn`, or `error`; implies logging. |
 | `-ls <scope>` | Scope mask such as `app+fsm+stat`, `afs`, `+event`, or `-lock`; implies logging. |
@@ -129,6 +131,7 @@ checks `-ct` first. When both audio start flags are passed, unmute wins.
 terminal startup. A bare `-l` remains boolean, so a directory requires
 `-l=DIR`, not `-l DIR`.
 
+`-serve` is a host of its own and does not combine with `-host` or `-join`.
 `-host` and `-join` are mutually exclusive and available on interactive play or
 the authored headless `-script` path; combining either with `-check`, `-schema`,
 or `-replay` is an error. The host holds tick zero until every requested
@@ -218,6 +221,33 @@ the game interval, so `-speed 2` runs a script at twice real time and `-speed 1/
 at half; `-speed max` removes pacing entirely and is refused alongside `-host` or
 `-join`, because a participant that outruns its peers is not simulating the session
 it is in.
+
+Every participant of one session must use the same rate. Only the `max` case is
+enforced, because the runtime cannot see a peer's pace: a faster participant is
+rebased to the authority's tick by every correction, which keeps the session
+correct and moves the ticks a script's actions were authored against. A dedicated
+host and an interactive participant always run real time.
+
+### A dedicated host
+
+`-serve` runs a host with no terminal, no renderer, no audio and no cursor of its
+own — the shared world, the authority, the correction cadence and the roster, and
+nothing a person would use locally. Holding no cursor is a roster property rather
+than an absence: the coordinator keeps its participant identity, its authority
+term and its vote, and its slot is `parameter.NoPlayerSlot`.
+
+```bash
+./bin/vif -serve :7777 -players 2 -size 120x40 -l -lv info -ls afs
+./bin/vif -join server.example:7777          # each person, elsewhere
+```
+
+`-size` matters: a server has no terminal to derive geometry from, and what it
+resolves is the D-14 map latch every joiner adopts. It logs a session summary
+periodically rather than drawing a status bar, so `-l -lv info` is how the run is
+watched. A server with no guests attached still ticks and still authors; the
+correction pump returns on an empty roster. A participant that dropped can dial
+back in and receive the world at whatever tick the session has reached, into the
+slot its departure released.
 
 ### A scripted participant
 
