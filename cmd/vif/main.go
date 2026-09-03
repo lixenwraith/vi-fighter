@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lixenwraith/terminal"
@@ -79,6 +80,8 @@ func main() {
 			cfg.Mode = app.ModeScript
 		}
 		_, err = app.RunScript(cfg, *flagScript)
+	case flagSession.serve != "":
+		err = app.RunServer(buildConfig())
 	default:
 		err = app.Run(buildConfig())
 	}
@@ -199,6 +202,13 @@ func buildConfig() app.Config {
 		Participants:  flagSession.players,
 	}
 
+	if flagSession.serve != "" {
+		cfg.HostAddress = flagSession.serve
+	}
+	if flagSession.size != "" {
+		cfg.Width, cfg.Height, _ = parseSize(flagSession.size) // validated in validateInvocation
+	}
+
 	if *flagAudioUnmute {
 		cfg.AudioMuted = false
 	} else if *flagAudioMute {
@@ -264,24 +274,51 @@ func (f *configFlags) register(fs *flag.FlagSet) {
 type sessionFlags struct {
 	host    string
 	join    string
+	serve   string
+	size    string
 	players int
 }
 
 func (f *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.host, "host", "", "Host a session on bind address, e.g. :7777")
 	fs.StringVar(&f.join, "join", "", "Join a session at host:port")
+	fs.StringVar(&f.serve, "serve", "", "Host a headless session with no local player, e.g. :7777")
+	fs.StringVar(&f.size, "size", "", "Simulated terminal size WxH for a run that has no terminal of its own")
 	fs.IntVar(&f.players, "players", 0, fmt.Sprintf(
 		"Host lobby size, itself included (2..%d; default 2 with -host, max with later :host)", parameter.MaxPlayers))
 }
 
 func (f sessionFlags) validateInvocation(schema, check bool, replay string) error {
-	if (f.host != "" || f.join != "" || f.players != 0) && (schema || check || replay != "") {
-		return fmt.Errorf("-host, -join, and -players are available only in interactive play")
+	if (f.host != "" || f.join != "" || f.serve != "" || f.players != 0) && (schema || check || replay != "") {
+		return fmt.Errorf("-host, -join, -serve, and -players are available only in interactive play")
 	}
 	if f.players != 0 && f.join != "" {
 		return fmt.Errorf("-players configures a host, not -join")
 	}
+	if f.serve != "" && (f.host != "" || f.join != "") {
+		return fmt.Errorf("-serve is a host of its own; it does not combine with -host or -join")
+	}
+	if f.size != "" {
+		if _, _, err := parseSize(f.size); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// parseSize reads a WxH geometry for a run that derives none from a terminal.
+func parseSize(spec string) (width, height int, err error) {
+	w, h, ok := strings.Cut(spec, "x")
+	if !ok {
+		return 0, 0, fmt.Errorf("-size %q is not WxH, for example 120x40", spec)
+	}
+	if width, err = strconv.Atoi(w); err != nil || width <= 0 {
+		return 0, 0, fmt.Errorf("-size %q has no usable width", spec)
+	}
+	if height, err = strconv.Atoi(h); err != nil || height <= 0 {
+		return 0, 0, fmt.Errorf("-size %q has no usable height", spec)
+	}
+	return width, height, nil
 }
 
 func validateInvocation(schema, check bool, replay, script string, watch bool, session sessionFlags) error {
