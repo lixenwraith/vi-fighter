@@ -1,34 +1,31 @@
 // Package app: answering for the participants behind you.
 //
-// A session with any participant behind a relay used to abandon the selective
-// protocol entirely and publish Phase 5 whole bodies to everyone. The reason was
-// honest and narrow: the exchange is between an authority and a receiver that can
-// answer it, and a relayed receiver's request goes to the neighbour that forwarded
-// the manifest — which held nothing.
+// The selective exchange runs between an authority and a receiver that can answer
+// it, and a relayed receiver's request goes to the neighbour that forwarded the
+// manifest. That neighbour therefore has to hold something.
 //
-// It holds something now. Every instance retains an index over each authoritative
-// capture it can prove it holds, bounded by the same SnapshotManifestRetention the
-// authority uses, and a participant with more than one link forwards the manifest
-// onward and answers from that retention. Four properties are what make it a role
-// rather than a routing layer:
+// Every instance retains an index over each authoritative capture it can prove it
+// holds, bounded by the same SnapshotManifestRetention the authority uses, and a
+// participant with more than one link forwards the manifest onward and answers
+// from that retention. Four properties make it a role rather than a routing layer:
 //
-//   - **One hop.** A relay that does not hold the manifest a request names does
+//   - One hop. A relay that does not hold the manifest a request names does
 //     not forward the request onward. It says so, and the receiver degrades to the
 //     whole body the authority's keyframe cadence is already flooding.
 //
-//   - **A relay cannot forge.** It serves pages it did not author, so what binds
+//   - A relay cannot forge. It serves pages it did not author, so what binds
 //     the answer is the authority's own root: the set must declare the root the
 //     receiver was sent in the manifest, and the repaired capture must reproduce
 //     it. A substituted, truncated or corrupted page fails one of the two, by the
 //     same check that catches a corrupt wire.
 //
-//   - **Retention is why it may answer at all.** An index enters the ring only
+//   - Retention is why it may answer at all. An index enters the ring only
 //     when the capture under it is provably the authority's — a whole correction
 //     re-checked its own integrity hash, or a comparison reproduced the
 //     authority's root — so a relay never holds a baseline of its own to serve
 //     from, and mixed-baseline assembly stays unreachable.
 //
-//   - **The edge that carries it pays for it.** A relayed repair is priced into
+//   - The edge that carries it pays for it. A relayed repair is priced into
 //     the relaying participant's own link plan, never the authority's.
 package app
 
@@ -38,6 +35,7 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/engine"
 	"github.com/lixenwraith/vi-fighter/internal/network"
 	"github.com/lixenwraith/vi-fighter/internal/parameter"
+	"github.com/lixenwraith/vi-fighter/internal/snapshot"
 	"github.com/lixenwraith/vi-fighter/internal/vlog"
 )
 
@@ -57,7 +55,7 @@ func (c *corrections) sessionRole() network.Role {
 // The retention test is what makes the claim honest rather than optimistic. A
 // participant that has never held an authoritative capture cannot answer anything,
 // and saying otherwise upstream would leave the participants behind it receiving
-// an index nobody can act on — which is the failure the Phase 6 gate existed to
+// an index nobody can act on — the failure the answerability gate exists to
 // prevent and which this role has to keep preventing.
 func (c *corrections) canRelay() bool {
 	if c.sessionRole() != network.RoleRelay {
@@ -132,18 +130,14 @@ func (c *corrections) relayedParticipants() []uint32 {
 	return behindLinks(link.Peers(), c.selectiveSource())
 }
 
-// canAnswerEveryParticipant is the Phase 6 gate with its meaning changed, which is
-// the whole of deliverable 2's fifth point.
+// canAnswerEveryParticipant reports whether every participant can be answered — a
+// relayed one can when the neighbour forwarding to it holds retention, which that
+// neighbour states in its own answer to the manifest since it is the only instance
+// that knows.
 //
-// It used to ask "is every participant directly linked", because only a directly
-// linked one could answer. The question now is "can every participant be
-// answered", and a relayed one can when the neighbour that forwards to it holds
-// retention — which that neighbour states in its own answer to the manifest, since
-// it is the only instance that knows.
-//
-// A session whose relays hold retention keeps the Phase 6 stream. A session with a
-// relay that cannot answer keeps the Phase 5 whole-body flood, unchanged, and the
-// reason is reported rather than silent.
+// A session whose relays hold retention keeps the selective stream. A session with
+// a relay that cannot answer keeps the whole-body flood, and the reason is
+// reported rather than silent.
 func (c *corrections) canAnswerEveryParticipant(ids []uint32) bool {
 	roster := 0
 	c.a.world.RunSafe(func() { roster = c.a.world.Resources.Player.Count() })
@@ -186,20 +180,20 @@ func (c *corrections) canAnswerEveryParticipant(ids []uint32) bool {
 // against — and this instance holds them only because it once proved it held that
 // exact state. Served names this instance, so the bytes are priced against the
 // edge that carried them.
-func (c *corrections) serveRelayed(port engine.NetworkPort, pending pendingRequest, req CorrectionRequest) bool {
+func (c *corrections) serveRelayed(port engine.NetworkPort, pending pendingRequest, req snapshot.CorrectionRequest) bool {
 	c.publishMu.Lock()
 	held, ok := c.retainedAtLocked(req.Tick)
 	c.publishMu.Unlock()
 	if !ok || held.authored {
 		return false
 	}
-	set, pages, err := buildShardSet(held.index, req)
+	set, pages, err := snapshot.BuildShardSet(held.index, req)
 	if err != nil {
 		c.sendUnserved(port, pending.from, req, "the retained index cannot answer this page vector")
 		return true
 	}
 	set.Served = c.a.localParticipant()
-	body, err := EncodeShardSet(set)
+	body, err := snapshot.EncodeShardSet(set)
 	if err != nil || len(body) > parameter.SnapshotShardBytesMax || len(body) > network.MaxPayloadSize {
 		c.sendUnserved(port, pending.from, req, "the repair is wider than a relayed answer may carry")
 		return true
@@ -231,13 +225,13 @@ func (c *corrections) serveRelayed(port engine.NetworkPort, pending pendingReque
 // unreachable. What the receiver does with it is degrade: it stops waiting for the
 // repair and takes the next whole authoritative world, which the keyframe cadence
 // is flooding anyway.
-func (c *corrections) sendUnserved(port engine.NetworkPort, to uint32, req CorrectionRequest, why string) {
+func (c *corrections) sendUnserved(port engine.NetworkPort, to uint32, req snapshot.CorrectionRequest, why string) {
 	c.a.snapshotTelemetry.relayUnserved.Add(1)
 	if port == nil {
 		return
 	}
-	body, err := EncodeUnserved(CorrectionUnserved{
-		Version: ManifestVersion, Tick: req.Tick, Term: req.Term,
+	body, err := snapshot.EncodeUnserved(snapshot.CorrectionUnserved{
+		Version: snapshot.ManifestVersion, Tick: req.Tick, Term: req.Term,
 		From: c.a.localParticipant(), Reason: why,
 	})
 	if err != nil {
@@ -251,7 +245,7 @@ func (c *corrections) sendUnserved(port engine.NetworkPort, to uint32, req Corre
 // applyUnserved is the receiver's half: stop waiting for a repair that is not
 // coming and take the next whole world instead.
 func (c *corrections) applyUnserved(body []byte) {
-	u, err := DecodeUnserved(body)
+	u, err := snapshot.DecodeUnserved(body)
 	if err != nil {
 		return
 	}

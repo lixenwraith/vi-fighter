@@ -12,14 +12,11 @@
 // staging pass is what the live pass cannot fail on: identical code, identical
 // input, and no dependence on the state being written over.
 //
-// Phase 4 changed what this has to cost. Phase 3 built a whole second App per
-// install and threw it away — 9 to 31 ms, which is right for a join that happens
-// once and wrong for a correction that happens five times a second. The staging
-// world is kept now: it is built the first time something is staged into it and
-// re-used for the life of the run, so a correction pays the load and not the
-// construction. And Commit stopped being a second full write: it reconciles the
-// live world onto the capture instead of clearing and re-inserting it, so what it
-// writes is the size of the correction rather than the size of the world.
+// Cost bounds the design. Building a second App per install costs 9 to 31 ms,
+// which suits a join that happens once and not a correction five times a second,
+// so the staging world is built on first use and re-used for the life of the run.
+// Commit reconciles the live world onto the capture rather than clearing and
+// re-inserting it, so it writes the size of the correction, not of the world.
 package app
 
 import (
@@ -29,6 +26,7 @@ import (
 	"time"
 
 	"github.com/lixenwraith/vi-fighter/internal/engine"
+	"github.com/lixenwraith/vi-fighter/internal/snapshot"
 	"github.com/lixenwraith/vi-fighter/internal/status"
 	"github.com/lixenwraith/vi-fighter/internal/vlog"
 )
@@ -43,7 +41,7 @@ import (
 type StagedInstall struct {
 	live    *App
 	staging *App
-	capture SharedCapture
+	capture snapshot.SharedCapture
 
 	stageDur   time.Duration
 	commitDur  time.Duration
@@ -54,7 +52,7 @@ type StagedInstall struct {
 	// difference is how far the live world had drifted from the capture when the
 	// commit wrote it. On a guest that is the correction magnitude — the distance
 	// between what this instance predicted and what the host actually had — and it
-	// is telemetry rather than an error (D-11 as Phase 4 weakened it).
+	// is telemetry rather than an error (weakened D-11).
 	difference engine.WorldDifference
 }
 
@@ -67,7 +65,7 @@ type StagedInstall struct {
 // whether the capture can be loaded by this build — carrier names, stream names,
 // FSM regions, every carrier's own decode — and that is what the second world is
 // for.
-func (a *App) StageShared(cap SharedCapture) (*StagedInstall, error) {
+func (a *App) StageShared(cap snapshot.SharedCapture) (*StagedInstall, error) {
 	started := time.Now() // [wall] telemetry only; the install carries no instant
 	if err := a.VerifyCapture(cap); err != nil {
 		return nil, err
@@ -104,7 +102,7 @@ func (s *StagedInstall) Tick() uint64 { return s.capture.Header.Tick }
 
 // Capture returns the staged capture, for a caller that has to answer the host
 // about what it installed.
-func (s *StagedInstall) Capture() SharedCapture { return s.capture }
+func (s *StagedInstall) Capture() snapshot.SharedCapture { return s.capture }
 
 // StagingWorld exposes the resolved second world, for a test that wants to compare
 // it against the live one before the swap. It is invalid after Commit or Discard.
@@ -168,13 +166,11 @@ func (s *StagedInstall) Discard() {
 // stagingWorld returns the second world captures resolve into, building it the
 // first time and re-using it after.
 //
-// Re-use is the whole point and it is also the thing that could go wrong. A staging
-// world that kept anything from the previous install — a carrier that merged rather
-// than replaced, an entity a store did not drop — would resolve the next capture
-// against a world the sender never had, and the staging pass would stop being the
-// question it is asked. TestStagingWorldReuseMatchesAFreshOne is what holds that:
-// two captures installed into one staging world in sequence must leave exactly what
-// a world built for the second alone would.
+// A staging world that kept anything from the previous install — a carrier that
+// merged rather than replaced, an entity a store did not drop — would resolve the
+// next capture against a world the sender never had. TestStagingWorldIsBuiltOnceAndReused
+// holds that: two captures installed into one staging world in sequence leave
+// exactly what a world built for the second alone would.
 //
 // What it cannot re-use is a world built on different bounds. The D-14 map latch
 // decides what the level setup reflows and what a capture's placements mean, so a
@@ -182,7 +178,7 @@ func (s *StagedInstall) Discard() {
 //
 // The second return reports whether the world was just built, which is what decides
 // whether its FSM boot queue still needs settling.
-func (a *App) stagingWorld(cap SharedCapture) (*App, bool, error) {
+func (a *App) stagingWorld(cap snapshot.SharedCapture) (*App, bool, error) {
 	a.stageMu.Lock()
 	defer a.stageMu.Unlock()
 
@@ -226,7 +222,7 @@ func (a *App) closeStagingWorld() { a.discardStagingWorld() }
 // It is deliberately per-instance and deliberately excluded from the compared
 // surface: a host publishes what a read cost it and a joiner publishes what an
 // install cost it, and neither is a fact about the world they now share. What the
-// numbers are for is Phase 4's cadence, which has to be chosen from a measurement
+// numbers are for is the cadence, which has to be chosen from a measurement
 // rather than a guess.
 type snapshotTelemetry struct {
 	captureUS   *atomic.Int64
@@ -250,7 +246,7 @@ type snapshotTelemetry struct {
 	refused    *atomic.Int64
 	superseded *atomic.Int64
 
-	// The correction magnitude, which is what Phase 4 puts where DESYNC was. It is
+	// The correction magnitude, published where DESYNC used to be. It is
 	// how far this instance's prediction had drifted from the authority at the
 	// moment the authority arrived: component cells, the distinct entities behind
 	// them, and the largest distance a shared placement moved — the one a player
@@ -260,7 +256,7 @@ type snapshotTelemetry struct {
 	correctionCells    *atomic.Int64
 	correctionTick     *atomic.Int64
 
-	// The operating point, which is Phase 5's answer to "the cadence is a
+	// The operating point, the answer to "the cadence is a
 	// constant". cadenceTicks and keyframeInterval are what the controller
 	// currently holds; keyframePeriod is their product, which is the value the
 	// convergence floor bounds and therefore the one worth reading first.
@@ -286,7 +282,7 @@ type snapshotTelemetry struct {
 	// what says whether one actually arrived.
 	keyframeAge *atomic.Int64
 
-	// The Phase 6 selective-correction counters.
+	// The selective-correction counters.
 	//
 	// They are grouped by the question each group answers. The first is "what did
 	// the index cost" — manifests published and received, and their bytes, which
@@ -342,7 +338,7 @@ type snapshotTelemetry struct {
 	replaySkipped  *atomic.Int64
 	replayUnusable *atomic.Bool
 
-	// Phase 7. staleTerm counts artifacts the term gate dropped as belonging to a
+	// Authority continuity. staleTerm counts artifacts the term gate dropped as belonging to a
 	// generation the session has left, which is the ordinary in-flight case across
 	// a handoff rather than an error; handoffBytes is what one handoff cost this
 	// instance on the wire, so the migration's price is measured beside the
@@ -440,7 +436,7 @@ func newSnapshotTelemetry(reg *status.Registry) snapshotTelemetry {
 	}
 }
 
-// Timings reports what the two halves cost, for the cadence Phase 4 has to choose.
+// Timings reports what the two halves cost, for choosing the cadence.
 func (s *StagedInstall) Timings() (stage, commit time.Duration) { return s.stageDur, s.commitDur }
 
 // release hands the staging world back. It is not closed: the world is the run's,
@@ -460,7 +456,7 @@ func (s *StagedInstall) release() { s.staging = nil }
 // spawns cursor slot zero centred on the map inside New, and a staging world built
 // on different bounds would reject nothing but would answer a different question
 // from the one being asked.
-func (a *App) newStagingApp(cap SharedCapture) (*App, error) {
+func (a *App) newStagingApp(cap snapshot.SharedCapture) (*App, error) {
 	cfg := a.cfg
 	cfg.Mode = ModeHeadless
 	cfg.Journal = false
@@ -493,13 +489,13 @@ func (a *App) newStagingApp(cap SharedCapture) (*App, error) {
 // world is built from that same instance's configuration, so asking it again would
 // re-derive the same verdict from the same inputs — and would fail outright after a
 // reset, whose session counter a freshly constructed world has not reached.
-func (a *App) installSharedResolved(cap SharedCapture) error {
+func (a *App) installSharedResolved(cap snapshot.SharedCapture) error {
 	return a.installShared(cap)
 }
 
 // reconcileSharedResolved is the live half of a staged install: the same capture,
 // already proved loadable by the staging pass, written onto the world this instance
 // is holding rather than over the top of it.
-func (a *App) reconcileSharedResolved(cap SharedCapture) (engine.WorldDifference, error) {
+func (a *App) reconcileSharedResolved(cap snapshot.SharedCapture) (engine.WorldDifference, error) {
 	return a.reconcileShared(cap)
 }
