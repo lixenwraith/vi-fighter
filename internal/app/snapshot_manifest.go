@@ -184,6 +184,10 @@ type CorrectionManifest struct {
 	// surface on both sides at once. Hashing all of them would leave a root
 	// disagreement no shard could close; hashing none of them would stop a mirror
 	// of the authority's own cursor from ever being corrected.
+	// The authority generation this index was produced under is not repeated here:
+	// it is in Header, which every authoritative artifact carries and which the
+	// root absorbs, so a manifest from another term cannot compare equal to this
+	// one. Two places to read one fact is how the two stop agreeing.
 	Authority uint32 `json:"authority"`
 
 	// Sections is every section, always. The alternative — sending only the
@@ -438,8 +442,9 @@ func sectionHash(section string, pages []uint64) uint64 {
 // authority: including the tick would make every comparison fail for a reason that
 // is not a disagreement about the world. What *is* absorbed is the identity a
 // disagreement would otherwise be silent about — the manifest version, the capture
-// schema, and the run, session and seed — so two instances that are not in the
-// same session cannot reach an equal root.
+// schema, the run, session and seed, and the authority term — so two instances
+// that are not in the same session, or not in the same generation of it, cannot
+// reach an equal root.
 func manifestRoot(h CaptureHeader, authority uint32, sections []SectionSummary) uint64 {
 	w := fnv.New64a()
 	_, _ = w.Write([]byte(hashDomainRoot))
@@ -452,6 +457,7 @@ func manifestRoot(h CaptureHeader, authority uint32, sections []SectionSummary) 
 	writeUint64(w, uint64(h.MapWidth))
 	writeUint64(w, uint64(h.MapHeight))
 	writeUint64(w, uint64(authority))
+	writeUint64(w, uint64(h.Term))
 	writeUint64(w, uint64(len(sections)))
 	for _, s := range sections {
 		writeString(w, s.ID)
