@@ -61,7 +61,7 @@ render abstraction, while the orchestrator owns the terminal capability.
 |---|---|
 | `cmd/vif` | Grouped config/log/session flags including startup host/join selection, logging/journal/runtime-capture setup, replay/script/watch/check/schema selection, process exit policy. |
 | `internal/content` | Immutable corpus model; root-directory load; plain-text sanitization and authored TOML blocks; corpus cursor. Internal because it depends on game `core.CodeBlock`. |
-| `internal/app` | Negotiate startup sessions, compose play/headless/replay Apps, drive frame/input/playback/script loops, capture and install the shared world, run the correction cadence and authority succession, and verify anchor/config identity. |
+| `internal/app` | Negotiate startup sessions, compose play/headless/replay/script/server Apps, drive frame/input/playback/script loops, capture and install the shared world, run the correction cadence and authority succession, and verify anchor/config identity. |
 | `internal/asset` | Embedded default FSM files, embedded tutorial corpus, built-in splash bitmap font. |
 | `internal/component` | Pure ECS component data and related enums/masks. Position is declared here but stored specially by `engine`. |
 | `internal/core` | Small shared value types, entity ID and replication domain, modes, code blocks, the deterministic dependency resolver both `service` and `engine` order with, crash and stderr-capture support. |
