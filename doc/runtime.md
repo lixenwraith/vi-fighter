@@ -13,24 +13,51 @@ operated on by the runtime, see [ECS and events](ecs-and-events.md).
 | `ModePlay` | Yes | No | terminal / terminal | Yes | `PausableClock`; scheduler and event goroutines |
 | `ModeHeadless` | No | Yes | caller / caller | No | `ManualClock`; harness or authored `ScriptDriver` invokes ticks and injections; an authored host/join script may attach network I/O |
 | `ModeReplay` | Yes | Yes | journal / playback controls | Yes | `ManualClock`; `journal.ReplayDriver` invokes ticks and injections |
+| `ModeScript` | Yes | Yes | script / playback controls | Yes | `ManualClock`; `journal.ScriptDriver` invokes ticks and injections; the presented form of a `ModeHeadless` script, network I/O included |
 
 The five predicates in `internal/app/config.go` are the policy boundary:
 `Presents`, `Driven`, `OwnsGeometry`, `OwnsInput`, and `Audio`. Assembly checks
 them rather than scattering mode comparisons through the runtime. A driven
 config defaults to terminal-equivalent geometry 80x24 when dimensions are not
-supplied, rejects a simulation speed setting because only `Tick` advances its
-clock, and rejects I/O settings the selected mode cannot honor.
+supplied and rejects I/O settings the selected mode cannot honor. It also rejects
+a simulation speed setting, because only `Tick` advances its clock — with one
+exception: an authored script reads `-speed` as its wall pace, which is a
+property of the run rather than of the clock. See §1.1.
 
 `cmd/vif` normally constructs `ModePlay`; `-replay <file>` constructs a replay
 from the journal anchor, and `-script <file>` constructs a caller-driven
-`ModeHeadless` run from an authored tick schedule. `-check` and `-schema` are
-non-runtime tool paths:
+`ModeHeadless` run from an authored tick schedule, or `ModeScript` with `-watch`.
+`-check` and `-schema` are non-runtime tool paths:
 
 | Tool path | Entry | Terminal initialized? | Result |
 |---|---|---:|---|
 | Validate | `app.Check` | No | Resolve and load FSM plus corpus; print accepted/rejected sources. |
 | Export schema | `app.Schema` | No | Emit schema version 1 JSON for events, fields, actions, guards, operators, and config fields. |
-| Run script | `app.RunScript` | No | Execute a bounded versioned TOML schedule; optional `-host`/`-join` uses the normal TCP gate. |
+| Run script | `app.RunScript` | Only with `-watch` | Execute a bounded versioned TOML schedule; optional `-host`/`-join` uses the normal TCP gate. |
+
+### 1.1 Script pacing and presentation
+
+A script is a deterministic list of inputs at named simulation positions. Two
+things about how one is *run* are policy rather than content:
+
+| `-speed` | Effect on a script |
+|---|---|
+| unset | Real time in a session, unpaced when solo. A solo script that opens a session with `:host` starts pacing at that tick and re-anchors its clock there. |
+| `1`, `2`, `1/2`, … | One tick occupies that multiple of the game interval. `2` is twice real time, `1/2` is half. |
+| `max` | No wall pacing at all. Refused when `-host` or `-join` is present: a participant that outruns its peers is not simulating the session it is in. |
+
+`-watch` presents the run on this terminal instead of running it headlessly. The
+simulation is unchanged — the same manual clock, the same script geometry, the
+same driver — so a presented run and a headless one of the same script produce
+the same world. Only pan and quit are offered while a presented script is in a
+session; pause, step and rate are instance-local and half a session cannot be
+paused.
+
+Together these make a scripted participant: one side of a session plays a fixed
+sequence at real time while a person plays the other freely, which is how a
+scripted demonstration is shown and how a reproduction is held constant while the
+other participant is fuzzed by hand. `script/sparring-host.toml` and
+`script/sparring-guest.toml` are the two directions.
 
 Diagnostics are configured before the terminal enters its alternate screen so
 startup failures and runtime reports remain recoverable.

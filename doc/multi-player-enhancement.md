@@ -298,6 +298,23 @@ For a manual two-terminal check:
 ./bin/vif -join 127.0.0.1:7777
 ```
 
+One side can be scripted instead, which holds it constant across runs while the
+other is played by hand:
+
+```sh
+# terminal 1
+./bin/vif -script script/sparring-host.toml -host 127.0.0.1:7777 -players 2
+
+# terminal 2
+./bin/vif -join 127.0.0.1:7777
+```
+
+A scripted participant is an ordinary one: it takes a roster slot, produces
+crossings at the agreed apply ticks, and is corrected like any other guest. It is
+wall-paced at the game interval so it cannot outrun its peers; `-speed` selects
+another rate and `-watch` presents the scripted side on its own terminal. See
+[Runtime](runtime.md) §1.1.
+
 Exercise rapid `h`/`l` sequences on both participants across several correction
 cadences. A corrected cursor must not subsequently visit an older cell because of
 a delayed copy. Also verify typing, gold destruction, combat, reset, disconnect,

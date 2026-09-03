@@ -107,11 +107,12 @@ useful CI addition even though the current workflow does not perform one.
 | `-config-game`, `-config-content`, `-config-keymap`, `-config-embedded` | Discoverable aliases for `-g`, `-f`, `-k`, and `-d`. |
 | `-check` | Resolve and validate FSM, keymap, audio, and content; print result and exit. |
 | `-schema` | Print FSM/event schema JSON, exit. |
-| `-speed <rate>` | Initial play-mode rate: `1/8`, `1/4`, `1/2`, `1`, `2`, `4`, or `8`. |
+| `-speed <rate>` | Initial play-mode rate: `1/8`, `1/4`, `1/2`, `1`, `2`, `4`, or `8`. With `-script` it is the run's wall pace instead, and additionally accepts `max`. |
 | `-seed <uint64>` | Root RNG seed; zero draws a seed and logs it. |
 | `-j[=DIR]`, `-journal[=DIR]` | Record non-system-origin events to a dedicated replay journal. |
 | `-replay <file>` | Present a recorded journal instead of starting interactive play. |
-| `-script <file>` | Run a bounded authored TOML schedule headlessly; may be combined with `-host` or `-join`. |
+| `-script <file>` | Run a bounded authored TOML schedule; may be combined with `-host` or `-join`. |
+| `-watch` | Present a `-script` run on this terminal instead of running it headlessly. |
 | `-host <address>` | Bind a session, for example `:7777`. |
 | `-join <address>` | Join a session at `host:port`; the host supplies seed/config/content identity. |
 | `-players <n>` | Participants a `-host` lobby waits for, itself included; 2 by default, up to `parameter.MaxPlayers`. |
@@ -204,12 +205,44 @@ Unknown top-level and action fields are errors. `run` and `tick` default to zero
 `count` applies only to an intent, and the four char-wait intents additionally
 require a one-rune `char`. Geometry must either omit both dimensions or set both.
 
-Pacing is a property of the run, not of the flags. Solo scripts execute flat out;
-a host/join pair is wall-paced at the fixed game tick so two independent processes
-can exchange artifacts normally; and a solo script that opens a session itself with
-`:host` starts pacing at that moment, with the clock re-anchored there rather than
-carried forward — otherwise the ticks it ran flat out would be a debt the pacing
-immediately spends. That is what makes a mid-run join scriptable at all.
+Pacing defaults to a property of the run rather than of the flags. Solo scripts
+execute flat out; a host/join pair is wall-paced at the fixed game tick so two
+independent processes can exchange artifacts normally; and a solo script that opens
+a session itself with `:host` starts pacing at that moment, with the clock
+re-anchored there rather than carried forward — otherwise the ticks it ran flat out
+would be a debt the pacing immediately spends. That is what makes a mid-run join
+scriptable at all.
+
+`-speed` overrides the default. A ladder token paces one tick at that multiple of
+the game interval, so `-speed 2` runs a script at twice real time and `-speed 1/2`
+at half; `-speed max` removes pacing entirely and is refused alongside `-host` or
+`-join`, because a participant that outruns its peers is not simulating the session
+it is in.
+
+### A scripted participant
+
+A script in a session is an ordinary participant: it holds a roster slot, produces
+crossings at the agreed apply ticks, and is corrected like any other guest. That
+makes one side of a session reproducible while a person plays the other — a
+scripted demonstration to join, or a fixed opponent to fuzz against while looking
+for a defect that must survive being reproduced.
+
+```bash
+# terminal 1 — the scripted side; add -watch to present it here as well
+./bin/vif -script script/sparring-host.toml -host 127.0.0.1:7777 -players 2
+
+# terminal 2 — the person
+./bin/vif -join 127.0.0.1:7777
+```
+
+`script/sparring-guest.toml` is the same arrangement with the roles reversed: the
+person hosts and the script joins. Re-running either command reproduces the
+scripted side exactly, so what changes between runs is only what the person did.
+
+`-watch` presents a scripted run on its own terminal over the same manual clock
+and the same script geometry, so the presented and headless forms simulate
+identically. A presented run that is in a session offers pan and quit only: pause,
+step and rate are instance-local and half a session cannot be paused.
 
 The checked-in Phase 3 pair runs the tick-zero 2,000-tick diagnostic, forces one
 owner-local heat burst on each side, and forces a quasar, storm, and

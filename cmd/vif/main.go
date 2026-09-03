@@ -35,10 +35,11 @@ var (
 	flagAudioUnmute  = flag.Bool("au", false, "Start with audio unmuted")
 	flagCheck        = flag.Bool("check", false, "Validate resolved game, keymap, audio, and content config, then exit")
 	flagSchema       = flag.Bool("schema", false, "Print FSM schema JSON and exit")
-	flagSpeed        = flag.String("speed", "", "Initial simulation rate: 1/8 1/4 1/2 1 2 4 8")
+	flagSpeed        = flag.String("speed", "", "Simulation rate: 1/8 1/4 1/2 1 2 4 8; with -script also \"max\" for no wall pacing")
 	flagSeed         = flag.Uint64("seed", 0, "Root RNG seed; 0 draws one and logs it")
 	flagReplay       = flag.String("replay", "", "Replay a recorded journal file instead of playing")
-	flagScript       = flag.String("script", "", "Run an authored deterministic TOML script headlessly")
+	flagScript       = flag.String("script", "", "Run an authored deterministic TOML script")
+	flagWatch        = flag.Bool("watch", false, "Present a -script run on this terminal instead of running it headlessly")
 
 	flagConfig  = newConfigFlags()
 	flagLogs    = newLogFlags()
@@ -62,7 +63,7 @@ func main() {
 	logStatus := setupDiagnostics()
 
 	var err error
-	sessionErr := validateInvocation(*flagSchema, *flagCheck, *flagReplay, *flagScript, flagSession)
+	sessionErr := validateInvocation(*flagSchema, *flagCheck, *flagReplay, *flagScript, *flagWatch, flagSession)
 	switch {
 	case sessionErr != nil:
 		err = sessionErr
@@ -73,7 +74,11 @@ func main() {
 	case *flagReplay != "":
 		err = app.PlayJournal(*flagReplay)
 	case *flagScript != "":
-		_, err = app.RunScript(buildConfig(), *flagScript)
+		cfg := buildConfig()
+		if *flagWatch {
+			cfg.Mode = app.ModeScript
+		}
+		_, err = app.RunScript(cfg, *flagScript)
 	default:
 		err = app.Run(buildConfig())
 	}
@@ -279,7 +284,7 @@ func (f sessionFlags) validateInvocation(schema, check bool, replay string) erro
 	return nil
 }
 
-func validateInvocation(schema, check bool, replay, script string, session sessionFlags) error {
+func validateInvocation(schema, check bool, replay, script string, watch bool, session sessionFlags) error {
 	modes := 0
 	for _, selected := range []bool{schema, check, replay != "", script != ""} {
 		if selected {
@@ -288,6 +293,9 @@ func validateInvocation(schema, check bool, replay, script string, session sessi
 	}
 	if modes > 1 {
 		return fmt.Errorf("-schema, -check, -replay, and -script are mutually exclusive")
+	}
+	if watch && script == "" {
+		return fmt.Errorf("-watch presents a -script run and has no other subject")
 	}
 	return session.validateInvocation(schema, check, replay)
 }
