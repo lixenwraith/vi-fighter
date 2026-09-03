@@ -55,7 +55,16 @@ import (
 // has fallen out of the ring is answered with a keyframe.
 type retainedCapture struct {
 	tick  uint64
+	term  network.AuthorityTerm
+	root  uint64
 	index *captureManifest
+
+	// authored marks a record this instance produced rather than adopted. An
+	// authority's retention is authored; a receiver's — and therefore a relay's —
+	// is not, and the difference is what the relay role rests on: an adopted record
+	// may be served only because its root is provably the authority's, so a
+	// substituted page fails the same check that catches a corrupt wire.
+	authored bool
 }
 
 // pendingRequest is one receiver's answer to a manifest, waiting to be served.
@@ -113,10 +122,24 @@ type selectiveState struct {
 	requests []pendingRequest
 
 	// Guest: the newest manifest that has arrived and not been answered, the
-	// baselines whose repairs are outstanding, and the repairs that have arrived.
+	// baselines whose repairs are outstanding, the repairs that have arrived, and
+	// the cannot-serve answers a relaying neighbour returned instead of one.
 	manifests [][]byte
 	shardSets [][]byte
+	unserved  [][]byte
 	awaiting  []*awaitingRepair
+
+	// forward is the newest manifest this instance has answered and not yet passed
+	// on, held until it can actually serve the tick the manifest names.
+	//
+	// Forwarding earlier would be forwarding a question this instance cannot
+	// answer: a relay that has itself asked for a repair does not hold that tick
+	// yet, so a request coming back for it would be refused and the participant
+	// behind would degrade for no reason. Waiting one exchange costs the relayed
+	// participant a cadence of freshness and buys it the whole selective path.
+	forward     []byte
+	forwardTick uint64
+	forwardFrom uint32
 
 	// wantKeyframe records that this receiver has asked for a whole world and is
 	// waiting for one, so a manifest arriving in the meantime is answered with the
@@ -141,12 +164,8 @@ type selectiveState struct {
 // have received.
 //
 // Caller MUST hold publishMu, and MUST NOT hold the world lock.
-func (c *corrections) publishManifest(port engine.NetworkPort, cap SharedCapture, due []uint32) (bool, error) {
+func (c *corrections) publishManifest(port engine.NetworkPort, index *captureManifest, due []uint32) (bool, error) {
 	started := time.Now() // [wall] telemetry only; outside the world lock
-	index, err := buildManifest(cap, c.a.localParticipant())
-	if err != nil {
-		return false, fmt.Errorf("correction manifest: %w", err)
-	}
 	body, err := EncodeManifest(index.Summary())
 	if err != nil {
 		return false, fmt.Errorf("correction manifest encode: %w", err)
@@ -157,7 +176,7 @@ func (c *corrections) publishManifest(port engine.NetworkPort, cap SharedCapture
 		// over. Say so and let the caller fall back rather than chunk it.
 		return false, fmt.Errorf("correction manifest is %d bytes, past one frame", len(body))
 	}
-	c.retainLocked(cap, index)
+	tick := index.Summary().Header.Tick
 
 	m := c.a.snapshotTelemetry
 	m.hashUS.Store(time.Since(started).Microseconds())
@@ -183,7 +202,7 @@ func (c *corrections) publishManifest(port engine.NetworkPort, cap SharedCapture
 			covered = false
 			continue
 		}
-		p.manifestTick = cap.Header.Tick
+		p.manifestTick = tick
 		p.silence++
 		sent++
 	}
@@ -197,13 +216,63 @@ func (c *corrections) publishManifest(port engine.NetworkPort, cap SharedCapture
 
 // retainLocked adds one capture and its index to the bounded ring.
 // Caller MUST hold publishMu.
-func (c *corrections) retainLocked(cap SharedCapture, index *captureManifest) {
+func (c *corrections) retainLocked(cap SharedCapture, index *captureManifest, authored bool) {
 	c.selective.retained = append(c.selective.retained, retainedCapture{
-		tick: cap.Header.Tick, index: index,
+		tick: cap.Header.Tick, term: cap.Header.Term, root: index.Root(),
+		index: index, authored: authored,
 	})
 	if n := len(c.selective.retained); n > parameter.SnapshotManifestRetention {
 		c.selective.retained = append(c.selective.retained[:0], c.selective.retained[n-parameter.SnapshotManifestRetention:]...)
 	}
+	c.a.snapshotTelemetry.relayRetained.Store(int64(len(c.selective.retained)))
+}
+
+// retain is retainLocked for a caller that holds no lock, which is every receiver
+// path: a receiver retains what it has just proved it holds, and it does so
+// outside the publication schedule because it is not publishing.
+func (c *corrections) retain(cap SharedCapture, index *captureManifest, authored bool) {
+	c.publishMu.Lock()
+	c.retainLocked(cap, index, authored)
+	c.publishMu.Unlock()
+}
+
+// retentionEvidence is what this instance can prove it holds: the newest
+// authoritative tick it has an index over, and how many such records it has.
+//
+// It is the succession's requirement (b), and the reason it reads the retained
+// ring rather than taking a capture is that a fresh capture proves only what the
+// candidate believes. A record is in this ring only because its root was the
+// authority's — the capture arrived whole and passed its integrity hash, or the
+// receiver's own index reproduced the authority's root — so the ring is evidence
+// about the session rather than about the instance.
+func (c *corrections) retentionEvidence() (uint64, int) {
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
+	newest := uint64(0)
+	for _, r := range c.selective.retained {
+		newest = max(newest, r.tick)
+	}
+	return newest, len(c.selective.retained)
+}
+
+// retainInstalled records the index over a capture this instance has just
+// installed whole, so it can answer for the authority afterwards.
+//
+// This is the primitive both Phase 7 deliverables rest on. A successor needs it to
+// prove its world is at least as new as the last artifact the old authority
+// published; a relay needs it to answer a request for a participant behind it. In
+// both cases what makes the record usable is that the capture *is* the
+// authority's, byte for byte — a whole correction re-checks its own integrity hash
+// before it installs — so an index built over it carries the authority's root.
+func (c *corrections) retainInstalled(cap SharedCapture) {
+	if cap.Header.Term == 0 {
+		return // not an authoritative artifact: nothing to answer for
+	}
+	index, err := buildManifest(cap, cap.Header.Authority)
+	if err != nil {
+		return
+	}
+	c.retain(cap, index, false)
 }
 
 // retainedAtLocked finds the capture a request names. Caller MUST hold publishMu.
@@ -251,12 +320,17 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 	}
 	m.requestBytes.Add(int64(len(pending.body)))
 
+	if !c.a.admitArtifactTerm(req.Term, pending.from) {
+		m.shardsRefused.Add(1)
+		return
+	}
 	c.publishMu.Lock()
 	p := c.peers[pending.from]
 	if p != nil {
 		p.silence = 0
 		p.answeredTick = req.Tick
 		p.converged = req.Converged()
+		p.relayed = slices.Clone(req.Relayed)
 	}
 	if req.Version != ManifestVersion || req.Schema != SnapshotSchema {
 		c.publishMu.Unlock()
@@ -271,6 +345,28 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 	}
 
 	held, ok := c.retainedAtLocked(req.Tick)
+	authored := ok && held.authored
+	c.publishMu.Unlock()
+
+	// A request this instance did not author the answer to is a relayed one. It is
+	// served from retention if that retention holds the tick, and refused in words
+	// if it does not — never with a body from a different baseline, and never by
+	// forwarding the request onward, which would be the routing layer this protocol
+	// deliberately does not have.
+	if !authored {
+		if req.Keyframe {
+			c.sendUnserved(port, pending.from, req, "a relay cannot author a whole world")
+			return
+		}
+		if c.serveRelayed(port, pending, req) {
+			return
+		}
+		c.sendUnserved(port, pending.from, req, "this participant retains no index for that tick")
+		return
+	}
+
+	c.publishMu.Lock()
+	held, ok = c.retainedAtLocked(req.Tick)
 	if !ok || req.Keyframe {
 		c.publishMu.Unlock()
 		c.sendKeyframeTo(port, pending.from, req.Tick)
@@ -421,11 +517,16 @@ func (c *corrections) applySelective() {
 	c.selectiveMu.Lock()
 	manifests := c.selective.manifests
 	shardSets := c.selective.shardSets
-	c.selective.manifests, c.selective.shardSets = nil, nil
+	unserved := c.selective.unserved
+	from := c.selective.source
+	c.selective.manifests, c.selective.shardSets, c.selective.unserved = nil, nil, nil
 	c.selectiveMu.Unlock()
 
 	for _, body := range shardSets {
 		c.applyRepair(body)
+	}
+	for _, body := range unserved {
+		c.applyUnserved(body)
 	}
 	if len(manifests) == 0 {
 		return
@@ -433,12 +534,51 @@ func (c *corrections) applySelective() {
 	// Only the newest manifest is answered. An older one describes a state the
 	// authority has already moved past, and answering it would spend a round trip
 	// repairing this instance onto a world nobody holds any more.
-	c.answerManifest(manifests[len(manifests)-1], int64(len(manifests)))
+	newest := manifests[len(manifests)-1]
+	tick := c.answerManifest(newest, int64(len(manifests)))
+	if tick == 0 {
+		return // refused; there is nothing worth passing on
+	}
+	c.holdForward(newest, from, tick)
+	c.flushForward()
+}
+
+// holdForward records the newest manifest this instance has answered, replacing
+// whatever it was holding: an older one describes a state the authority has moved
+// past, and passing it on would send the participants behind this one to repair
+// themselves onto a world nobody holds.
+func (c *corrections) holdForward(body []byte, from uint32, tick uint64) {
+	c.selectiveMu.Lock()
+	c.selective.forward, c.selective.forwardTick, c.selective.forwardFrom = body, tick, from
+	c.selectiveMu.Unlock()
+}
+
+// flushForward passes the held manifest on once this instance can answer for the
+// tick it names.
+func (c *corrections) flushForward() {
+	c.selectiveMu.Lock()
+	body, tick, from := c.selective.forward, c.selective.forwardTick, c.selective.forwardFrom
+	c.selectiveMu.Unlock()
+	if body == nil || !c.holdsRetention(tick) {
+		return
+	}
+	c.selectiveMu.Lock()
+	c.selective.forward, c.selective.forwardTick = nil, 0
+	c.selectiveMu.Unlock()
+	c.forwardManifest(body, from, tick)
+}
+
+// holdsRetention reports whether this instance can answer a request naming tick.
+func (c *corrections) holdsRetention(tick uint64) bool {
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
+	_, ok := c.retainedAtLocked(tick)
+	return ok
 }
 
 // answerManifest indexes this instance's own world against one manifest and
 // answers it.
-func (c *corrections) answerManifest(body []byte, arrived int64) {
+func (c *corrections) answerManifest(body []byte, arrived int64) uint64 {
 	m := c.a.snapshotTelemetry
 	m.manifestRecv.Add(arrived)
 	m.manifestBytesRecv.Add(int64(len(body)))
@@ -447,32 +587,43 @@ func (c *corrections) answerManifest(body []byte, arrived int64) {
 	if err != nil {
 		m.baselineRefusals.Add(1)
 		vlog.Debug("app", "msg", "manifest refused", "error", err.Error())
-		return
+		return 0
 	}
 	from := c.selectiveSource()
+	if !c.a.admitArtifactTerm(want.Header.Term, from) {
+		m.baselineRefusals.Add(1)
+		return 0
+	}
 	if want.Version != ManifestVersion || want.Header.Schema != SnapshotSchema {
 		m.baselineRefusals.Add(1)
 		c.requestKeyframe(from, want)
-		return
+		return 0
 	}
 	if err := c.a.verifyCaptureIdentity(want.Header); err != nil {
 		m.baselineRefusals.Add(1)
 		vlog.Debug("app", "msg", "manifest describes another session", "error", err.Error())
-		return
+		return 0
 	}
 
 	mine, err := c.a.CaptureShared()
 	if err != nil {
 		vlog.Warn("app", "msg", "manifest comparison capture", "error", err.Error())
-		return
+		return 0
 	}
+	// Compared under the authority's term rather than this instance's. The two are
+	// the same in the ordinary case; across a handoff a receiver that has adopted
+	// the record may still be holding a capture stamped a moment earlier, and
+	// comparing under two generations would make every root differ for a reason
+	// that is not a disagreement about the world.
+	mine.Header.Term = want.Header.Term
 	started := time.Now() // [wall] telemetry only; outside the world lock
 	index, err := buildManifest(mine, want.Authority)
 	if err != nil {
 		vlog.Warn("app", "msg", "manifest comparison index", "error", err.Error())
-		return
+		return 0
 	}
 	req, sections, pages := compareRequest(index, want)
+	req.Term = want.Header.Term
 	m.hashUS.Store(time.Since(started).Microseconds())
 	m.sectionsCompared.Add(int64(sections))
 	m.pagesCompared.Add(int64(pages))
@@ -481,6 +632,8 @@ func (c *corrections) answerManifest(body []byte, arrived int64) {
 		req.Keyframe = true
 		req.Sections = nil
 	}
+	// What this instance can answer for, stated where the authority will read it.
+	req.Relayed = c.relayedParticipants()
 	c.sendRequest(from, req)
 
 	if req.Converged() {
@@ -499,7 +652,7 @@ func (c *corrections) answerManifest(body []byte, arrived int64) {
 		c.selectiveMu.Lock()
 		c.selective.awaiting = nil
 		c.selectiveMu.Unlock()
-		return
+		return want.Header.Tick
 	}
 
 	c.selectiveMu.Lock()
@@ -512,6 +665,7 @@ func (c *corrections) answerManifest(body []byte, arrived int64) {
 			c.selective.awaiting[n-parameter.SnapshotCorrectionQueue:]...)
 	}
 	c.selectiveMu.Unlock()
+	return want.Header.Tick
 }
 
 // takeAwaiting claims the outstanding baseline a repair answers, dropping it and
@@ -548,6 +702,10 @@ func (c *corrections) applyRepair(body []byte) {
 	}
 	m.shardsRecv.Add(int64(len(set.Shards)))
 
+	if !c.a.admitArtifactTerm(set.Header.Term, set.Served) {
+		m.shardsRefused.Add(1)
+		return
+	}
 	awaiting := c.takeAwaiting(set.Header.Tick)
 	if awaiting == nil {
 		m.baselineRefusals.Add(1)
@@ -556,7 +714,7 @@ func (c *corrections) applyRepair(body []byte) {
 			"repair_tick", set.Header.Tick)
 		return
 	}
-	if err := validateShardSet(set, awaiting.tick, awaiting.manifest.Authority, awaiting.manifest.Header); err != nil {
+	if err := validateShardSet(set, awaiting.tick, awaiting.manifest.Authority, awaiting.manifest.Root, awaiting.manifest.Header); err != nil {
 		m.proofFailures.Add(1)
 		m.shardsRefused.Add(1)
 		vlog.Warn("app", "msg", "repair failed its proof", "error", err.Error())
@@ -583,6 +741,9 @@ func (c *corrections) applyRepair(body []byte) {
 		c.requestKeyframe(awaiting.from, awaiting.manifest)
 		return
 	}
+	// Installing may be what finally lets this instance answer for the tick it is
+	// holding a manifest to forward for.
+	c.flushForward()
 	m.shardsApplied.Add(int64(rep.Pages))
 	m.pagesRepaired.Add(int64(rep.Pages))
 	m.entitiesRepaired.Add(int64(rep.Entities))
@@ -606,6 +767,7 @@ func (c *corrections) requestKeyframe(from uint32, want CorrectionManifest) {
 		Tick:     want.Header.Tick,
 		Run:      want.Header.Run,
 		Session:  want.Header.Session,
+		Term:     want.Header.Term,
 		Keyframe: true,
 	})
 }
@@ -626,7 +788,8 @@ func (c *corrections) sendRequest(from uint32, req CorrectionRequest) {
 		// for the whole world instead of describing the difference.
 		c.sendRequest(from, CorrectionRequest{
 			Version: ManifestVersion, Schema: SnapshotSchema,
-			Tick: req.Tick, Run: req.Run, Session: req.Session, Keyframe: true,
+			Tick: req.Tick, Run: req.Run, Session: req.Session, Term: req.Term,
+			Keyframe: true,
 		})
 		return
 	}
@@ -659,6 +822,10 @@ func (c *corrections) receiveSelective(kind uint8, from uint32, body []byte) {
 		c.selective.shardSets = append(c.selective.shardSets, body)
 		if n := len(c.selective.shardSets); n > parameter.SnapshotCorrectionQueue {
 			c.selective.shardSets = append(c.selective.shardSets[:0], c.selective.shardSets[n-parameter.SnapshotCorrectionQueue:]...)
+		}
+	case network.MsgStateUnserved:
+		if len(c.selective.unserved) < parameter.SnapshotCorrectionQueue {
+			c.selective.unserved = append(c.selective.unserved, body)
 		}
 	case network.MsgStateRequest:
 		if len(c.selective.requests) < parameter.MaxPlayers*parameter.SnapshotCorrectionQueue {
