@@ -20,6 +20,7 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/network"
 	"github.com/lixenwraith/vi-fighter/internal/parameter"
 	"github.com/lixenwraith/vi-fighter/internal/render"
+	"github.com/lixenwraith/vi-fighter/internal/resource"
 	"github.com/lixenwraith/vi-fighter/internal/service"
 	"github.com/lixenwraith/vi-fighter/internal/system"
 	"github.com/lixenwraith/vi-fighter/internal/vlog"
@@ -78,18 +79,18 @@ type App struct {
 	// instance sends and applies, authority is whether it is allowed to.
 	authority *authority
 
-	// staging is the second world a capture resolves into before it is written
-	// into this one, built on first use and re-used for the life of the run. Phase
-	// 3 built one per install and threw it away, which is 9 to 31 ms a correction
-	// cannot afford five times a second.
+	// staging is the second world a capture resolves into before it is written into
+	// this one, built on first use and re-used for the life of the run: building one
+	// per install costs 9 to 31 ms, which a correction five times a second cannot
+	// afford.
 	stageMu  sync.Mutex
 	staging  *App
 	stagingW int
 	stagingH int
 }
 
-// New wires the runtime, releasing anything already started on failure
-// every step panicked; the map editor and wasm entry need errors
+// New wires the runtime, releasing anything already started on failure. Errors are
+// returned rather than panicked: the map editor and the wasm entry need them.
 func New(cfg Config) (*App, error) {
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
@@ -177,14 +178,14 @@ func (a *App) initServices() error {
 		_ = a.hub.Register(a.networkSvc)
 	}
 	if a.cfg.Mode.Audio() {
-		audioSrc, err := ResolveAudioConfig(a.cfg)
+		audioSrc, err := resource.Audio(a.cfg.Resources)
 		if err != nil {
 			return err
 		}
 		_ = a.hub.Register(service.NewAudioService(a.cfg.AudioMuted, a.cfg.AudioBackend, audioSrc))
 	}
 
-	contentSrc, err := ResolveContent(a.cfg)
+	contentSrc, err := resource.Corpus(a.cfg.Resources)
 	if err != nil {
 		return fmt.Errorf("content path: %w", err)
 	}
@@ -209,10 +210,10 @@ func (a *App) initWorld() {
 		r.OnSelective = a.receiveSelective
 		r.OnAuthority = a.receiveAuthorityFrame
 		r.OnPeerLost = a.reportPeerLost
-		// A session endpoint exists, so this run is shared for its whole life
-		// whether or not a peer is attached at a given tick. Latching it here rather
-		// than reading the port keeps the anchor, the D-14 verdict and the playout
-		// barrier answering one question, which is what a reproduction adopts.
+		// A session endpoint exists, so this run is shared for its whole life whether
+		// or not a peer is attached at a given tick. Latching here rather than
+		// reading the port keeps the anchor, the D-14 verdict and the playout barrier
+		// answering one question, which is what a reproduction adopts.
 		a.world.MarkSessionShared()
 	}
 
@@ -376,7 +377,7 @@ const embeddedLabel = "embedded"
 // resolveConfigID names the FSM entry a run loaded, or the embedded default.
 // Shared by the anchor writer and VerifyAnchor so the two cannot disagree.
 func resolveConfigID(cfg Config) string {
-	path, err := ResolveGameConfig(cfg)
+	path, err := resource.GameConfig(cfg.Resources)
 	if err != nil || path == "" {
 		return embeddedLabel
 	}
@@ -456,7 +457,7 @@ func (a *App) Close() {
 // loadKeymap merges an external key table over the embedded default document.
 func (a *App) loadKeymap() error {
 	base := input.DefaultKeyTable()
-	path, err := ResolveKeymap(a.cfg)
+	path, err := resource.Keymap(a.cfg.Resources)
 	if err != nil {
 		return fmt.Errorf("keymap path: %w", err)
 	}
@@ -483,7 +484,7 @@ func (a *App) loadKeymap() error {
 
 // loadFSM resolves and loads the FSM config, falling back to the embedded default
 func (a *App) loadFSM() error {
-	path, err := ResolveGameConfig(a.cfg)
+	path, err := resource.GameConfig(a.cfg.Resources)
 	if err != nil {
 		return fmt.Errorf("game config: %w", err)
 	}

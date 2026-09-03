@@ -1,8 +1,8 @@
 // Package app: the correction as an exchange rather than a broadcast.
 //
-// Phase 5's correction is one-directional and self-sufficient: the host reads its
+// A whole correction is one-directional and self-sufficient: the host reads its
 // world and sends a body, and a receiver either applies it or waits for the next.
-// Phase 6 keeps that as the floor and puts a cheaper exchange in front of it.
+// That remains the floor; this is the cheaper exchange in front of it.
 //
 //	host                                  guest
 //	 |  manifest (root + section hashes)    |
@@ -14,25 +14,24 @@
 //	 |  shard set: only mismatching pages   |
 //	 |------------------------------------->|  splice, verify root, install
 //
-// Three things about the shape are load-bearing.
+// Three properties are load-bearing.
 //
-// **The descent happens where the content is.** The guest sends its own page
-// hashes for the sections that disagreed, so the host compares against content it
-// already holds and answers in one round trip. Asking the host for its page hashes
-// first would cost two.
+// The descent happens where the content is. The guest sends its own page hashes
+// for the sections that disagreed, so the host compares against content it already
+// holds and answers in one round trip; asking for the host's page hashes first
+// would cost two.
 //
-// **Silence falls back rather than stalls.** Every manifest is answered, so a peer
-// that stops answering is a peer whose uplink cannot reach the authority — a relay
+// Silence falls back rather than stalls. Every manifest is answered, so a peer
+// that stops answering has an uplink that cannot reach the authority — a relayed
 // participant, or a broken return path. After SnapshotManifestSilenceCorrections
-// the host stops assuming it can repair that peer selectively and publishes the
-// Phase 5 body again, which reaches it by the same flood the artifacts use. No
-// peer is ever left with an index it cannot act on.
+// the host publishes the whole body again, which reaches it by the same flood the
+// artifacts use. No peer is left holding an index it cannot act on.
 //
-// **The keyframe schedule is untouched.** A whole compressed capture still goes
-// out every keyframe period, so the convergence floor, the maximum repair age and
-// the recovery from any refusal are exactly what they were. Everything here is an
-// optimisation of the interval between keyframes, and every failure in it ends at
-// the keyframe that was going to be sent anyway.
+// The keyframe schedule is untouched. A whole compressed capture still goes out
+// every keyframe period, so the convergence floor, the maximum repair age and the
+// recovery from any refusal are unchanged. Everything here optimises the interval
+// between keyframes, and every failure in it ends at the keyframe that was going
+// to be sent anyway.
 package app
 
 import (
@@ -43,6 +42,7 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/engine"
 	"github.com/lixenwraith/vi-fighter/internal/network"
 	"github.com/lixenwraith/vi-fighter/internal/parameter"
+	"github.com/lixenwraith/vi-fighter/internal/snapshot"
 	"github.com/lixenwraith/vi-fighter/internal/vlog"
 )
 
@@ -57,7 +57,7 @@ type retainedCapture struct {
 	tick  uint64
 	term  network.AuthorityTerm
 	root  uint64
-	index *captureManifest
+	index *snapshot.Manifest
 
 	// authored marks a record this instance produced rather than adopted. An
 	// authority's retention is authored; a receiver's — and therefore a relay's —
@@ -98,13 +98,13 @@ type pendingRequest struct {
 // being room for one.
 type awaitingRepair struct {
 	tick     uint64
-	capture  SharedCapture
-	index    *captureManifest
-	manifest CorrectionManifest
+	capture  snapshot.SharedCapture
+	index    *snapshot.Manifest
+	manifest snapshot.CorrectionManifest
 	from     uint32
 }
 
-// selectiveState is the Phase 6 half of the correction protocol, on whichever side
+// selectiveState is the exchange half of the correction protocol, on whichever side
 // this run turns out to be.
 //
 // The whole of it is covered by selectiveMu rather than by publishMu, and that is
@@ -160,13 +160,13 @@ type selectiveState struct {
 //
 // A false return is what makes the caller send a whole body as well: it means at
 // least one due peer has not answered a manifest recently enough to be repaired
-// selectively, and that peer is owed the Phase 5 correction it would otherwise
+// selectively, and that peer is owed the whole correction it would otherwise
 // have received.
 //
 // Caller MUST hold publishMu, and MUST NOT hold the world lock.
-func (c *corrections) publishManifest(port engine.NetworkPort, index *captureManifest, due []uint32) (bool, error) {
+func (c *corrections) publishManifest(port engine.NetworkPort, index *snapshot.Manifest, due []uint32) (bool, error) {
 	started := time.Now() // [wall] telemetry only; outside the world lock
-	body, err := EncodeManifest(index.Summary())
+	body, err := snapshot.EncodeManifest(index.Summary())
 	if err != nil {
 		return false, fmt.Errorf("correction manifest encode: %w", err)
 	}
@@ -216,7 +216,7 @@ func (c *corrections) publishManifest(port engine.NetworkPort, index *captureMan
 
 // retainLocked adds one capture and its index to the bounded ring.
 // Caller MUST hold publishMu.
-func (c *corrections) retainLocked(cap SharedCapture, index *captureManifest, authored bool) {
+func (c *corrections) retainLocked(cap snapshot.SharedCapture, index *snapshot.Manifest, authored bool) {
 	c.selective.retained = append(c.selective.retained, retainedCapture{
 		tick: cap.Header.Tick, term: cap.Header.Term, root: index.Root(),
 		index: index, authored: authored,
@@ -230,7 +230,7 @@ func (c *corrections) retainLocked(cap SharedCapture, index *captureManifest, au
 // retain is retainLocked for a caller that holds no lock, which is every receiver
 // path: a receiver retains what it has just proved it holds, and it does so
 // outside the publication schedule because it is not publishing.
-func (c *corrections) retain(cap SharedCapture, index *captureManifest, authored bool) {
+func (c *corrections) retain(cap snapshot.SharedCapture, index *snapshot.Manifest, authored bool) {
 	c.publishMu.Lock()
 	c.retainLocked(cap, index, authored)
 	c.publishMu.Unlock()
@@ -258,17 +258,17 @@ func (c *corrections) retentionEvidence() (uint64, int) {
 // retainInstalled records the index over a capture this instance has just
 // installed whole, so it can answer for the authority afterwards.
 //
-// This is the primitive both Phase 7 deliverables rest on. A successor needs it to
+// This is the primitive authority succession rests on. A successor needs it to
 // prove its world is at least as new as the last artifact the old authority
 // published; a relay needs it to answer a request for a participant behind it. In
 // both cases what makes the record usable is that the capture *is* the
 // authority's, byte for byte — a whole correction re-checks its own integrity hash
 // before it installs — so an index built over it carries the authority's root.
-func (c *corrections) retainInstalled(cap SharedCapture) {
+func (c *corrections) retainInstalled(cap snapshot.SharedCapture) {
 	if cap.Header.Term == 0 {
 		return // not an authoritative artifact: nothing to answer for
 	}
-	index, err := buildManifest(cap, cap.Header.Authority)
+	index, err := snapshot.BuildManifest(cap, cap.Header.Authority)
 	if err != nil {
 		return
 	}
@@ -311,7 +311,7 @@ func (c *corrections) serveRequests() {
 // cannot be built or would not be worth building.
 func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) {
 	m := c.a.snapshotTelemetry
-	req, err := DecodeCorrectionRequest(pending.body)
+	req, err := snapshot.DecodeCorrectionRequest(pending.body)
 	if err != nil {
 		m.shardsRefused.Add(1)
 		vlog.Debug("app", "msg", "correction request refused",
@@ -332,7 +332,7 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 		p.converged = req.Converged()
 		p.relayed = slices.Clone(req.Relayed)
 	}
-	if req.Version != ManifestVersion || req.Schema != SnapshotSchema {
+	if req.Version != snapshot.ManifestVersion || req.Schema != snapshot.Schema {
 		c.publishMu.Unlock()
 		m.shardsRefused.Add(1)
 		vlog.Debug("app", "msg", "correction request refused",
@@ -373,7 +373,7 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 		return
 	}
 	m.shardsRequested.Add(int64(countRequestedPages(req)))
-	set, pages, err := buildShardSet(held.index, req)
+	set, pages, err := snapshot.BuildShardSet(held.index, req)
 	c.publishMu.Unlock()
 	if err != nil {
 		m.shardsRefused.Add(1)
@@ -383,7 +383,7 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 		return
 	}
 
-	body, err := EncodeShardSet(set)
+	body, err := snapshot.EncodeShardSet(set)
 	if err != nil || !c.repairIsWorthSending(len(body)) {
 		// A repair this wide is not repairing anything: past the frame bound it
 		// does not fit, and past the measured keyframe size the whole world is
@@ -391,7 +391,7 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 		// about the peer is that its prediction is not tracking — a storm moves
 		// the entire shared population every cadence, and no index makes that
 		// cheap — so the peer is dropped out of the exchange for a few
-		// publications and served the Phase 5 body instead, which is the cheapest
+		// publications and served the whole body instead, which is the cheapest
 		// thing anyone has for a receiver that has diverged wholesale. This
 		// correction is still answered — with the whole world, which is what the
 		// peer needs and what it would otherwise wait a cadence for — and the
@@ -432,7 +432,7 @@ func (c *corrections) widenLocked(id uint32) {
 // protocol's: past it a repair no longer fits one transport frame. The measured
 // keyframe size is the session's: a repair wider than the capture it is repairing
 // toward has stopped being an optimisation, and the fallback is what keeps the
-// selective path from ever costing more than the Phase 5 stream it replaced.
+// selective path from ever costing more than the whole-body stream it replaced.
 func (c *corrections) repairIsWorthSending(bytes int) bool {
 	if bytes > parameter.SnapshotShardBytesMax || bytes > network.MaxPayloadSize {
 		return false
@@ -445,7 +445,7 @@ func (c *corrections) repairIsWorthSending(bytes int) bool {
 
 // countRequestedPages is how many pages a request put in play, which is the unit
 // the shard counters are reported in.
-func countRequestedPages(req CorrectionRequest) int {
+func countRequestedPages(req snapshot.CorrectionRequest) int {
 	n := 0
 	for _, s := range req.Sections {
 		n += len(s.Hash)
@@ -483,7 +483,7 @@ func (c *corrections) sendKeyframeTo(port engine.NetworkPort, id uint32, minTick
 	}
 	c.publishMu.Unlock()
 
-	body, err := EncodeCorrection(cap)
+	body, err := snapshot.EncodeCorrection(cap)
 	if err != nil {
 		vlog.Warn("app", "msg", "keyframe fallback encode", "error", err.Error())
 		return
@@ -583,7 +583,7 @@ func (c *corrections) answerManifest(body []byte, arrived int64) uint64 {
 	m.manifestRecv.Add(arrived)
 	m.manifestBytesRecv.Add(int64(len(body)))
 
-	want, err := DecodeManifest(body)
+	want, err := snapshot.DecodeManifest(body)
 	if err != nil {
 		m.baselineRefusals.Add(1)
 		vlog.Debug("app", "msg", "manifest refused", "error", err.Error())
@@ -594,7 +594,7 @@ func (c *corrections) answerManifest(body []byte, arrived int64) uint64 {
 		m.baselineRefusals.Add(1)
 		return 0
 	}
-	if want.Version != ManifestVersion || want.Header.Schema != SnapshotSchema {
+	if want.Version != snapshot.ManifestVersion || want.Header.Schema != snapshot.Schema {
 		m.baselineRefusals.Add(1)
 		c.requestKeyframe(from, want)
 		return 0
@@ -617,12 +617,12 @@ func (c *corrections) answerManifest(body []byte, arrived int64) uint64 {
 	// that is not a disagreement about the world.
 	mine.Header.Term = want.Header.Term
 	started := time.Now() // [wall] telemetry only; outside the world lock
-	index, err := buildManifest(mine, want.Authority)
+	index, err := snapshot.BuildManifest(mine, want.Authority)
 	if err != nil {
 		vlog.Warn("app", "msg", "manifest comparison index", "error", err.Error())
 		return 0
 	}
-	req, sections, pages := compareRequest(index, want)
+	req, sections, pages := snapshot.CompareRequest(index, want)
 	req.Term = want.Header.Term
 	m.hashUS.Store(time.Since(started).Microseconds())
 	m.sectionsCompared.Add(int64(sections))
@@ -643,7 +643,7 @@ func (c *corrections) answerManifest(body []byte, arrived int64) uint64 {
 		// from a clock the session has moved past.
 		m.hashOnly.Add(1)
 		mine.Header = want.Header
-		if integrity, err := captureIntegrity(mine); err == nil {
+		if integrity, err := snapshot.Integrity(mine); err == nil {
 			mine.Header.Integrity = integrity
 			if err := c.install(mine); err != nil {
 				vlog.Debug("app", "msg", "hash-only correction not applied", "error", err.Error())
@@ -694,7 +694,7 @@ func (c *corrections) applyRepair(body []byte) {
 	m := c.a.snapshotTelemetry
 	m.shardBytesRecv.Add(int64(len(body)))
 
-	set, err := DecodeShardSet(body)
+	set, err := snapshot.DecodeShardSet(body)
 	if err != nil {
 		m.shardsRefused.Add(1)
 		vlog.Debug("app", "msg", "repair refused", "error", err.Error())
@@ -714,7 +714,7 @@ func (c *corrections) applyRepair(body []byte) {
 			"repair_tick", set.Header.Tick)
 		return
 	}
-	if err := validateShardSet(set, awaiting.tick, awaiting.manifest.Authority, awaiting.manifest.Root, awaiting.manifest.Header); err != nil {
+	if err := snapshot.ValidateShardSet(set, awaiting.tick, awaiting.manifest.Authority, awaiting.manifest.Root, awaiting.manifest.Header); err != nil {
 		m.proofFailures.Add(1)
 		m.shardsRefused.Add(1)
 		vlog.Warn("app", "msg", "repair failed its proof", "error", err.Error())
@@ -726,7 +726,7 @@ func (c *corrections) applyRepair(body []byte) {
 	// capture exactly as it was rather than half-repaired.
 	repaired := awaiting.capture
 	index := awaiting.index
-	rep, err := applyShardSet(&repaired, index, set)
+	rep, err := snapshot.ApplyShardSet(&repaired, index, set)
 	if err != nil {
 		m.proofFailures.Add(1)
 		m.shardsRefused.Add(1)
@@ -755,15 +755,15 @@ func (c *corrections) applyRepair(body []byte) {
 
 // requestKeyframe asks the authority for a whole world and remembers that it is
 // waiting for one, so the next manifest does not start a repair instead.
-func (c *corrections) requestKeyframe(from uint32, want CorrectionManifest) {
+func (c *corrections) requestKeyframe(from uint32, want snapshot.CorrectionManifest) {
 	c.selectiveMu.Lock()
 	c.selective.wantKeyframe = true
 	c.selective.awaiting = nil
 	c.selectiveMu.Unlock()
 	c.a.snapshotTelemetry.keyframeFallback.Add(1)
-	c.sendRequest(from, CorrectionRequest{
-		Version:  ManifestVersion,
-		Schema:   SnapshotSchema,
+	c.sendRequest(from, snapshot.CorrectionRequest{
+		Version:  snapshot.ManifestVersion,
+		Schema:   snapshot.Schema,
 		Tick:     want.Header.Tick,
 		Run:      want.Header.Run,
 		Session:  want.Header.Session,
@@ -773,12 +773,12 @@ func (c *corrections) requestKeyframe(from uint32, want CorrectionManifest) {
 }
 
 // sendRequest returns one answer to the peer the manifest came from.
-func (c *corrections) sendRequest(from uint32, req CorrectionRequest) {
+func (c *corrections) sendRequest(from uint32, req snapshot.CorrectionRequest) {
 	port := c.a.sessionTransport()
 	if port == nil || from == 0 {
 		return
 	}
-	body, err := EncodeCorrectionRequest(req)
+	body, err := snapshot.EncodeCorrectionRequest(req)
 	if err != nil {
 		vlog.Warn("app", "msg", "correction request encode", "error", err.Error())
 		return
@@ -786,8 +786,8 @@ func (c *corrections) sendRequest(from uint32, req CorrectionRequest) {
 	if len(body) > network.MaxPayloadSize {
 		// A page vector this wide means the disagreement is not page-shaped. Ask
 		// for the whole world instead of describing the difference.
-		c.sendRequest(from, CorrectionRequest{
-			Version: ManifestVersion, Schema: SnapshotSchema,
+		c.sendRequest(from, snapshot.CorrectionRequest{
+			Version: snapshot.ManifestVersion, Schema: snapshot.Schema,
 			Tick: req.Tick, Run: req.Run, Session: req.Session, Term: req.Term,
 			Keyframe: true,
 		})
@@ -883,11 +883,11 @@ func (a *App) localParticipant() uint32 {
 
 // verifyCaptureIdentity answers "is this header describing my session" without
 // requiring the body a full verification hashes.
-func (a *App) verifyCaptureIdentity(h CaptureHeader) error {
-	if h.Schema != SnapshotSchema {
-		return fmt.Errorf("capture schema %d, this build reads %d", h.Schema, SnapshotSchema)
+func (a *App) verifyCaptureIdentity(h snapshot.CaptureHeader) error {
+	if h.Schema != snapshot.Schema {
+		return fmt.Errorf("capture schema %d, this build reads %d", h.Schema, snapshot.Schema)
 	}
-	return firstAnchorMismatch("manifest", a.anchorIdentity(captureAnchor(h)))
+	return firstAnchorMismatch("manifest", a.anchorIdentity(snapshot.Anchor(h)))
 }
 
 // selectiveSummary is what the selective protocol is currently doing, for the

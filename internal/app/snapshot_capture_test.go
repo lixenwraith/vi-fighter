@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"reflect"
 	"sort"
 	"strconv"
@@ -13,9 +14,10 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/event"
 	"github.com/lixenwraith/vi-fighter/internal/manifest"
 	"github.com/lixenwraith/vi-fighter/internal/parameter"
+	"github.com/lixenwraith/vi-fighter/internal/snapshot"
 )
 
-// TestCaptureReconstructsTheSharedWorld is Phase 2's construction proof at its
+// TestCaptureReconstructsTheSharedWorld is the construction proof at its
 // simplest: a capture taken from one run, encoded, decoded and installed into a
 // second run that had reached a different state, must leave the second run's
 // shared surface equal to the first's.
@@ -24,6 +26,7 @@ import (
 // holding the same state through different insertion histories are the same
 // world, and it is the state a session has to agree on.
 func TestCaptureReconstructsTheSharedWorld(t *testing.T) {
+	t.Parallel()
 	origin := mustHeadless(t, 0x5A4E, 120, 40)
 	defer origin.Close()
 	receiver := mustHeadless(t, 0x5A4E, 120, 40)
@@ -43,11 +46,11 @@ func TestCaptureReconstructsTheSharedWorld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
-	encoded, err := EncodeCapture(cap)
+	encoded, err := snapshot.EncodeCapture(cap)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	decoded, err := DecodeCapture(encoded)
+	decoded, err := snapshot.DecodeCapture(encoded)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -55,7 +58,7 @@ func TestCaptureReconstructsTheSharedWorld(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 
-	if idx, lx, ly, differs := FirstDiff(origin.SnapshotShared(), receiver.SnapshotShared()); differs {
+	if idx, lx, ly, differs := snapshot.FirstDiff(origin.SnapshotShared(), receiver.SnapshotShared()); differs {
 		t.Fatalf("installed world differs at line %d\n  origin:   %s\n  receiver: %s", idx, lx, ly)
 	}
 }
@@ -65,6 +68,7 @@ func TestCaptureReconstructsTheSharedWorld(t *testing.T) {
 // install a world whose learned routing or maze generator is this instance's
 // rather than the sender's, and nothing in the shared digest hashes either.
 func TestCaptureCarriesEveryDeclaredSystem(t *testing.T) {
+	t.Parallel()
 	a := mustHeadless(t, 0x5A4E, 120, 40)
 	defer a.Close()
 	tickUntilCursor(t, a)
@@ -108,6 +112,7 @@ func TestCaptureCarriesEveryDeclaredSystem(t *testing.T) {
 // instance (D-2) and its effects are per-instance (D-6), so a capture that
 // carried one would install another participant's private world.
 func TestCaptureCarriesNoPlayerState(t *testing.T) {
+	t.Parallel()
 	a := mustHeadless(t, 0x5A4E, 120, 40)
 	defer a.Close()
 	tickUntilCursor(t, a)
@@ -158,6 +163,7 @@ func TestCaptureCarriesNoPlayerState(t *testing.T) {
 // point — a field added to any shared component is covered without anyone
 // remembering this rule, which is what the hand-written exclusion could not offer.
 func TestCaptureNamesNoPlayerDomainEntity(t *testing.T) {
+	t.Parallel()
 	a := mustHeadless(t, 0x5A4E, 120, 40)
 	defer a.Close()
 	tickUntilCursor(t, a)
@@ -227,6 +233,7 @@ func namedPlayerEntities(v reflect.Value, path string) []string {
 // from being installed as if it were intact. Integrity and identity answer
 // different questions and a capture has to pass both before anything is written.
 func TestVerifyCaptureRejectsATamperedBody(t *testing.T) {
+	t.Parallel()
 	a := mustHeadless(t, 0x5A4E, 120, 40)
 	defer a.Close()
 	tickUntilCursor(t, a)
@@ -250,7 +257,7 @@ func TestVerifyCaptureRejectsATamperedBody(t *testing.T) {
 	wrongSeed.Header.Seed ^= 1
 	// The seed is inside the integrity hash, so restore it there before asserting
 	// the identity check is what rejects this one.
-	wrongSeed.Header.Integrity, _ = captureIntegrity(wrongSeed)
+	wrongSeed.Header.Integrity, _ = snapshot.Integrity(wrongSeed)
 	err = a.VerifyCapture(wrongSeed)
 	if err == nil {
 		t.Fatal("a capture from a different seed was accepted")
@@ -263,11 +270,11 @@ func TestVerifyCaptureRejectsATamperedBody(t *testing.T) {
 // sharedSurfacesDiffer reports whether two runs disagree on the compared shared
 // surface.
 func sharedSurfacesDiffer(a, b *App) bool {
-	_, _, _, differs := FirstDiff(a.SnapshotShared(), b.SnapshotShared())
+	_, _, _, differs := snapshot.FirstDiff(a.SnapshotShared(), b.SnapshotShared())
 	return differs
 }
 
-// TestInstalledWorldStaysIdenticalForFiveHundredTicks is Phase 2's construction
+// TestInstalledWorldStaysIdenticalForFiveHundredTicks is the continuation
 // proof: not that a capture reproduces a world, but that it reproduces a world
 // whose *future* is the same.
 //
@@ -284,11 +291,12 @@ func sharedSurfacesDiffer(a, b *App) bool {
 // (D-2, D-6), so two instances holding one shared world still hold different
 // drains, and a drain defeated on one advances the shared escalation FSM there
 // and nowhere else. That is not a capture defect — it is a crossing, and
-// delivering crossings is Phase 4's subject. What is provable here is the shared
+// delivering crossings is the correction protocol's subject. What is provable here is the shared
 // simulation's own evolution, which is what every piece of hidden state feeds.
 // The plan's record-stream-driven, cross-process form of this gate belongs with
 // the wire that carries a capture, and is named in the phase's remaining work.
 func TestInstalledWorldStaysIdenticalForFiveHundredTicks(t *testing.T) {
+	t.Parallel()
 	for _, seed := range []uint64{0x5A4E, 0xC0FFEE, 0x1234ABCD} {
 		t.Run(seedName(seed), func(t *testing.T) {
 			origin := mustHeadless(t, seed, 120, 40)
@@ -341,18 +349,18 @@ func TestInstalledWorldStaysIdenticalForFiveHundredTicks(t *testing.T) {
 			if err != nil {
 				t.Fatalf("capture: %v", err)
 			}
-			encoded, err := EncodeCapture(cap)
+			encoded, err := snapshot.EncodeCapture(cap)
 			if err != nil {
 				t.Fatalf("encode: %v", err)
 			}
-			decoded, err := DecodeCapture(encoded)
+			decoded, err := snapshot.DecodeCapture(encoded)
 			if err != nil {
 				t.Fatalf("decode: %v", err)
 			}
 			if err := receiver.InstallShared(decoded); err != nil {
 				t.Fatalf("install: %v", err)
 			}
-			if idx, lx, ly, differs := FirstDiff(origin.SnapshotShared(), receiver.SnapshotShared()); differs {
+			if idx, lx, ly, differs := snapshot.FirstDiff(origin.SnapshotShared(), receiver.SnapshotShared()); differs {
 				t.Fatalf("install tick differs at line %d\n  origin:   %s\n  receiver: %s", idx, lx, ly)
 			}
 
@@ -360,7 +368,7 @@ func TestInstalledWorldStaysIdenticalForFiveHundredTicks(t *testing.T) {
 			for step := range 10 {
 				origin.Tick(50)
 				receiver.Tick(50)
-				if idx, lx, ly, differs := FirstDiff(origin.SnapshotShared(), receiver.SnapshotShared()); differs {
+				if idx, lx, ly, differs := snapshot.FirstDiff(origin.SnapshotShared(), receiver.SnapshotShared()); differs {
 					t.Fatalf("diverged %d ticks after install, at line %d\n  origin:   %s\n  receiver: %s\n%s",
 						(step+1)*50, idx, lx, ly,
 						strings.Join(diffSharedWorld(origin, receiver, 8), "\n"))
@@ -379,7 +387,7 @@ func seedName(seed uint64) string {
 // quiescePlayerDomain stops the player-domain systems whose output crosses into
 // the shared world (D-3), so two instances holding one shared world evolve it the
 // same way. Without this the comparison measures crossing delivery, which no
-// capture provides and Phase 4 does.
+// capture provides and the correction protocol does.
 //
 // Drains are the load-bearing one: they are player-domain entities whose defeat
 // crosses as EventDrainDefeated and drives the shared escalation FSM, so two
@@ -423,4 +431,88 @@ func tickToStatBoundary(a *App) {
 		}
 		a.Tick(1)
 	}
+}
+
+// A refusal has to arrive before the world is written, and the staging pass cannot
+// always make it.
+//
+// StageShared asks "can this build load this capture" of a second world, and for
+// most carriers that is the whole question. It is not the whole question for a
+// carrier whose acceptance depends on state the staging world does not have: the
+// genetic registry's registered species set is entered by a level region the
+// staging world has never been in, so it accepts what the live world refuses — and
+// the refusal then arrives after the store pass has already rewritten every shared
+// entity. That is the shape of the desync reported at the tower transition, and it
+// is what the pre-flight below is for.
+
+// TestACarrierRefusalLeavesTheLiveWorldUntouched drives the refusal through the
+// live install path and asserts the world is exactly what it was.
+func TestACarrierRefusalLeavesTheLiveWorldUntouched(t *testing.T) {
+	t.Parallel()
+	author := mustHeadless(t, 0x5EEDBEEF, 120, 40)
+	defer author.Close()
+	tickUntilCursor(t, author)
+	author.Tick(40)
+
+	receiver := mustHeadless(t, 0x5EEDBEEF, 120, 40)
+	defer receiver.Close()
+	tickUntilCursor(t, receiver)
+	receiver.Tick(55)
+
+	cap, err := author.CaptureShared()
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	unloadable := withUnregisterableGeneticState(t, cap)
+
+	before := receiver.Snapshot()
+	err = receiver.InstallShared(unloadable)
+	if err == nil {
+		t.Fatal("a capture no carrier could load was installed")
+	}
+	if !strings.Contains(err.Error(), "genetic") {
+		t.Fatalf("the refusal does not name the carrier that made it: %v", err)
+	}
+	after := receiver.Snapshot()
+	if idx, want, got, differs := snapshot.FirstDiff(before, after); differs {
+		t.Fatalf("a refused capture changed the live world, line %d\n  before: %s\n  after:  %s",
+			idx, want, got)
+	}
+}
+
+// withUnregisterableGeneticState rewrites one carrier's record so that no build can
+// install it: a population for a species with no declaration beside it.
+//
+// The integrity hash is recomputed, so the capture is intact and describes this
+// session — the refusal under test is the carrier's, not the envelope's.
+func withUnregisterableGeneticState(t *testing.T, cap snapshot.SharedCapture) snapshot.SharedCapture {
+	t.Helper()
+	out := cloneCapture(t, cap)
+	replaced := false
+	for i := range out.Systems {
+		if out.Systems[i].System != "genetic" {
+			continue
+		}
+		var snap map[string]any
+		if err := json.Unmarshal(out.Systems[i].Data, &snap); err != nil {
+			t.Fatalf("decode genetic record: %v", err)
+		}
+		snap["registrations"] = nil
+		snap["registry"] = []map[string]any{{"id": 7, "name": "species_7"}}
+		data, err := json.Marshal(snap)
+		if err != nil {
+			t.Fatalf("encode genetic record: %v", err)
+		}
+		out.Systems[i].Data = data
+		replaced = true
+	}
+	if !replaced {
+		t.Fatal("the capture carries no genetic record to make unloadable")
+	}
+	integrity, err := snapshot.Integrity(out)
+	if err != nil {
+		t.Fatalf("integrity: %v", err)
+	}
+	out.Header.Integrity = integrity
+	return out
 }
