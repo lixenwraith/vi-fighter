@@ -1,4 +1,4 @@
-// Package app: the correction as an exchange rather than a broadcast.
+// The correction as an exchange rather than a broadcast.
 //
 // A whole correction is one-directional and self-sufficient: the host reads its
 // world and sends a body, and a receiver either applies it or waits for the next.
@@ -14,24 +14,17 @@
 //	 |  shard set: only mismatching pages   |
 //	 |------------------------------------->|  splice, verify root, install
 //
-// Three properties are load-bearing.
+// The descent happens where the content is: the guest sends its own page hashes for
+// the sections that disagreed, so the host compares against content it already holds
+// and answers in one round trip. Asking for the host's page hashes first would cost
+// two.
 //
-// The descent happens where the content is. The guest sends its own page hashes
-// for the sections that disagreed, so the host compares against content it already
-// holds and answers in one round trip; asking for the host's page hashes first
-// would cost two.
-//
-// Silence falls back rather than stalls. Every manifest is answered, so a peer
-// that stops answering has an uplink that cannot reach the authority — a relayed
-// participant, or a broken return path. After SnapshotManifestSilenceCorrections
-// the host publishes the whole body again, which reaches it by the same flood the
-// artifacts use. No peer is left holding an index it cannot act on.
-//
-// The keyframe schedule is untouched. A whole compressed capture still goes out
-// every keyframe period, so the convergence floor, the maximum repair age and the
-// recovery from any refusal are unchanged. Everything here optimises the interval
-// between keyframes, and every failure in it ends at the keyframe that was going
-// to be sent anyway.
+// Silence falls back rather than stalls. Every manifest is answered, so a peer that
+// stops answering has an uplink that cannot reach the authority — a relayed
+// participant, or a broken return path — and after SnapshotManifestSilenceCorrections
+// the host sends it the whole body again. No peer is left holding an index it cannot
+// act on.
+
 package app
 
 import (
@@ -156,62 +149,63 @@ type selectiveState struct {
 // === host: publishing the index ===
 
 // publishManifest sends the index for one capture to the peers that are in the
-// selective protocol, and reports whether every due peer was covered.
+// selective protocol, and returns the due peers it did not reach.
 //
-// A false return is what makes the caller send a whole body as well: it means at
-// least one due peer has not answered a manifest recently enough to be repaired
-// selectively, and that peer is owed the whole correction it would otherwise
-// have received.
+// Those are what the caller owes a whole body: a peer skipped here has not
+// answered a manifest recently enough to be repaired selectively, or its link
+// refused the frame, and either way the index alone would leave it holding
+// nothing it can act on. Naming them rather than reporting a bare "some peer was
+// missed" is what keeps the two decisions one decision — the skip is recorded
+// where it is made, so no second pass can re-derive it from state this one has
+// already moved on.
 //
 // Caller MUST hold publishMu, and MUST NOT hold the world lock.
-func (c *corrections) publishManifest(port engine.NetworkPort, index *snapshot.Manifest, due []uint32) (bool, error) {
+func (c *corrections) publishManifest(port engine.NetworkPort, index *snapshot.Manifest, due []uint32) ([]uint32, error) {
 	started := time.Now() // [wall] telemetry only; outside the world lock
 	body, err := snapshot.EncodeManifest(index.Summary())
 	if err != nil {
-		return false, fmt.Errorf("correction manifest encode: %w", err)
+		return due, fmt.Errorf("correction manifest encode: %w", err)
 	}
 	if len(body) > network.MaxPayloadSize {
 		// A manifest is section summaries and a header; outgrowing a frame would
 		// mean the world had grown a section vector no descent could be cheap
 		// over. Say so and let the caller fall back rather than chunk it.
-		return false, fmt.Errorf("correction manifest is %d bytes, past one frame", len(body))
+		return due, fmt.Errorf("correction manifest is %d bytes, past one frame", len(body))
 	}
 	tick := index.Summary().Header.Tick
 
 	m := c.a.snapshotTelemetry
 	m.hashUS.Store(time.Since(started).Microseconds())
 
-	covered, sent := true, 0
+	var missed []uint32
+	sent := 0
 	for _, id := range due {
 		p := c.peers[id]
 		if p == nil {
 			continue
 		}
-		if p.wide > 0 {
-			// Diverged too widely to repair last time; the caller owes it a body.
+		switch {
+		case p.wide > 0:
+			// Diverged too widely to repair last time; owed a body instead.
 			p.wide--
-			covered = false
-			continue
-		}
-		if p.silence >= parameter.SnapshotManifestSilenceCorrections {
-			covered = false
-			continue
-		}
-		if !port.Send(id, uint8(network.MsgStateManifest), body) {
+		case p.silence >= parameter.SnapshotManifestSilenceCorrections:
+			// Answering nothing; the index cannot reach it.
+		case !port.Send(id, uint8(network.MsgStateManifest), body):
 			p.refused++
-			covered = false
+		default:
+			p.manifestTick = tick
+			p.silence++
+			sent++
 			continue
 		}
-		p.manifestTick = tick
-		p.silence++
-		sent++
+		missed = append(missed, id)
 	}
 	if sent > 0 {
 		m.manifestSent.Add(1)
 		m.manifestBytesSent.Add(int64(len(body) * sent))
 		c.recordSelectiveSizeLocked(len(body))
 	}
-	return covered, nil
+	return missed, nil
 }
 
 // retainLocked adds one capture and its index to the bounded ring.
