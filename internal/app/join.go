@@ -143,6 +143,14 @@ func (a *App) HostSession(o network.SessionOffer) error {
 		return err
 	}
 	a.adoptMapLatch(o.Anchor.Anchor)
+	// This endpoint was built before the lobby measured its links, so the lead the
+	// offer carries reaches the host's own barrier here. Two participants deferring
+	// crossings by different leads apply them at different ticks.
+	a.world.RunSafe(func() {
+		if r := a.world.Resources.Network; r != nil {
+			r.BarrierDelayTicks = o.BarrierDelayTicks
+		}
+	})
 	a.openAuthority(o, o.Host)
 	a.authority.publishChain()
 	return a.configureSessionRoster(o, o.Host)
@@ -242,22 +250,7 @@ func (a *App) configureSessionRoster(o network.SessionOffer, local network.PeerI
 // (D-11). A slot the offer names and the world does not hold is therefore normal
 // here rather than an error.
 func (a *App) bindSessionControl(o network.SessionOffer, local network.PeerID) error {
-	a.world.RunSafe(func() {
-		roster := a.world.Resources.Player
-		for _, p := range o.Participants {
-			if p.Slot == parameter.NoPlayerSlot {
-				continue
-			}
-			e := roster.Slot(p.Slot)
-			if c, ok := a.world.Components.Cursor.GetPtr(e); ok {
-				c.PeerID = uint32(p.ID)
-				c.Control = component.ControlRemote
-				if p.ID == local {
-					c.Control = component.ControlHuman
-				}
-			}
-		}
-	})
+	a.world.RunSafe(func() { a.bindCursorOwnersLocked(o.Participants, local) })
 	localAssignment, ok := o.Participant(local)
 	if !ok {
 		return fmt.Errorf("join roster omits local participant %d", local)
@@ -282,6 +275,28 @@ func (a *App) bindSessionControl(o network.SessionOffer, local network.PeerID) e
 	}
 	a.world.RunSafe(a.ctx.PublishMapLock)
 	return nil
+}
+
+// bindCursorOwnersLocked writes each slot's owning participant onto its cursor, and
+// which of them this instance drives. The owner travels in every capture, and a
+// slot no roster can attribute is a participant a succession cannot see leave.
+// Caller MUST hold updateMutex.
+func (a *App) bindCursorOwnersLocked(participants []network.SessionParticipant, local network.PeerID) {
+	roster := a.world.Resources.Player
+	for _, p := range participants {
+		if p.Slot == parameter.NoPlayerSlot {
+			continue
+		}
+		c, ok := a.world.Components.Cursor.GetPtr(roster.Slot(p.Slot))
+		if !ok {
+			continue
+		}
+		c.PeerID = uint32(p.ID)
+		c.Control = component.ControlRemote
+		if p.ID == local {
+			c.Control = component.ControlHuman
+		}
+	}
 }
 
 // localSlot returns the roster slot this instance's input follows.
