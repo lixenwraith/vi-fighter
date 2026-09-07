@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"slices"
 	"time"
@@ -189,7 +190,11 @@ func (a *App) lobbyQuorum() int {
 // run, so "smallest" would mean shrinking the map under participants already
 // playing on it — which D-14 forbids for the same reason a terminal may not crop a
 // shared map. First is a number the session can commit to before it starts.
-func (a *App) noteJoinerReport(_ network.PeerID, report network.JoinerReport) {
+func (a *App) noteJoinerReport(id network.PeerID, report network.JoinerReport) {
+	// The address the joiner declared, and the confirmation dial that decides
+	// whether it is worth publishing. It runs before the geometry check, because a
+	// participant that reported no terminal still reported a port.
+	a.reach.noteDeclared(id, report)
 	if !report.Sized() {
 		return
 	}
@@ -273,14 +278,46 @@ func newJoiningApp(cfg Config) (*App, error) {
 	}
 
 	cfg.networkConfig = pending.TransportConfig()
+
+	// Bound before the reply that declares it, and only for a session whose
+	// authorship can move: where it cannot, a guest's port is for nothing. What is
+	// declared is what was actually bound, which is why this cannot wait until the
+	// transport exists — the reply goes out first. See reach.go.
+	var listener net.Listener
+	var declared string
+	gate := &peerLinkGate{}
+	if !offer.FixedAuthority && !cfg.NoAdvertise {
+		listener, declared = bindAdvertised(cfg.ListenAddress, cfg.JoinAddress, cfg.networkConfig)
+	}
+	closeListener := func() {
+		if listener != nil {
+			_ = listener.Close()
+		}
+	}
+	if listener != nil {
+		// Installed before New, because New is what builds the port that serves
+		// this listener. The gate holds the App rather than closing over it for the
+		// same reason: it does not exist yet.
+		cfg.networkConfig.PreboundListener = listener
+		cfg.networkConfig.AcceptPeer = network.PeerAcceptor(network.PeerGate{
+			Local:    offer.Assigned,
+			Identity: identityFromAnchor(offer.Anchor),
+			Admit:    gate.admit,
+		}, cfg.networkConfig.ConnectTimeout)
+	}
+
 	cfg, err = ConfigForJoin(cfg, offer)
 	if err != nil {
+		closeListener()
 		return reject(err)
 	}
 	a, err := New(cfg)
 	if err != nil {
+		closeListener()
 		return reject(err)
 	}
+	gate.bind(a)
+	a.reach.adoptListener(listener, declared)
 	a.pendingJoin = pending
 	a.sessionOffer = offer
 	// Identity now, world and roster at the start gate: a mismatched joiner must be
@@ -383,6 +420,10 @@ func (a *App) releaseParticipant(id network.PeerID) {
 	if id == 0 || id == hostParticipantID {
 		return
 	}
+	a.reach.forget(id)
+	if a.authority != nil {
+		a.authority.forgetReachable(id)
+	}
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
 	a.sessionRoster = slices.DeleteFunc(a.sessionRoster,
@@ -403,8 +444,13 @@ func (a *App) offerLocked(anchor event.JoinAnchor, assigned network.PeerID) netw
 		Assigned:          assigned,
 		Term:              term,
 		Participants:      slices.Clone(a.sessionRoster),
-		BarrierDelayTicks: parameter.NetworkBarrierDelayTicks,
-		FixedAuthority:    a.cfg.FixedAuthority,
+		BarrierDelayTicks: max(a.barrierDelay, parameter.NetworkBarrierDelayTicks),
+		// A joiner adopts both tables whole: the map so it can dial from it, and
+		// the confirmed set because it is the succession input every participant of
+		// this term has to hold identically (reach.go).
+		Addresses:      a.reachAddresses(),
+		Reachable:      a.reachConfirmed(),
+		FixedAuthority: a.cfg.FixedAuthority,
 		// Derived from the anchor this offer carries rather than read again, so
 		// what the coordinator later compares a joiner's report against is exactly
 		// what it offered — a reset between the two cannot turn a valid join into a
@@ -418,6 +464,9 @@ func (a *App) offerLocked(anchor event.JoinAnchor, assigned network.PeerID) netw
 // set to its own identity.
 func (a *App) hostOffer() (network.SessionOffer, error) {
 	anchor := a.JoinAnchor()
+	// Read before sessionMu for the same reason the anchor is: both take the world
+	// lock, and a departure released from under that lock takes sessionMu.
+	link, _ := a.sessionTransport().(engine.LinkMeasuringPort)
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
 	if len(a.sessionRoster) == 0 {
@@ -433,6 +482,10 @@ func (a *App) hostOffer() (network.SessionOffer, error) {
 			break
 		}
 	}
+	// The one moment the lead may be chosen: the roster is closed, the links to
+	// everyone in it have been up for as long as the lobby took, and no
+	// participant holds a value yet. See barrier.go.
+	a.adoptBarrierDelayLocked(link)
 	a.sessionOffer = a.offerLocked(anchor, assigned)
 	return a.sessionOffer, a.sessionOffer.Validate()
 }

@@ -181,6 +181,11 @@ type PlayerResource struct {
 	// Entity is the local cursor, 0 when none exists. Every read is under updateMutex.
 	Entity core.Entity
 
+	// status is where the bare per-player metric keys live. The roster owns which
+	// slot they describe, because the roster is what decides which cursor "the
+	// player" names on this instance; see status/player.go.
+	status *status.Registry
+
 	slots [parameter.MaxPlayers]core.Entity
 	local uint8
 	count int
@@ -244,6 +249,7 @@ func (pr *PlayerResource) LocalSlot() uint8 { return pr.local }
 func (pr *PlayerResource) SetLocal(slot uint8) {
 	if slot == parameter.NoPlayerSlot {
 		pr.local, pr.Entity = slot, 0
+		pr.publishLocalSlot()
 		pr.DropPrediction()
 		return
 	}
@@ -252,7 +258,21 @@ func (pr *PlayerResource) SetLocal(slot uint8) {
 	}
 	pr.local = slot
 	pr.Entity = pr.slots[slot]
+	pr.publishLocalSlot()
 	pr.DropPrediction()
+}
+
+// publishLocalSlot points the bare per-player metric keys at the slot this
+// instance drives. A slot outside the roster mirrors nothing.
+func (pr *PlayerResource) publishLocalSlot() {
+	if pr.status == nil {
+		return
+	}
+	if int(pr.local) >= parameter.MaxPlayers {
+		pr.status.SetLocalSlot(-1)
+		return
+	}
+	pr.status.SetLocalSlot(int(pr.local))
 }
 
 // Slot returns the entity in a roster slot, 0 when empty
@@ -829,6 +849,15 @@ type OffTickDrainPort interface {
 	DrainOffTick(dst []network.Inbound) int
 }
 
+// PeerDialingPort is a transport a participant may open its own links on, which is
+// what makes a session more than the star `-join` builds. It is asserted for rather
+// than required for the same reason LinkMeasuringPort is: a transport that cannot
+// dial is still a perfectly good one, and a session on it is simply a star.
+type PeerDialingPort interface {
+	Connected(peerID uint32) bool
+	DialPeer(addr string, term network.AuthorityTerm) error
+}
+
 // NetworkSessionPort exposes barrier metadata negotiated before simulation starts.
 type NetworkSessionPort interface {
 	ParticipantID() uint32
@@ -931,6 +960,11 @@ type NetworkResource struct {
 	// nothing. Succession is a decision about who may author, which belongs beside
 	// the correction protocol rather than inside the transport.
 	OnAuthority func(kind uint8, from uint32, body []byte)
+
+	// OnReachable hands the session layer one applied reachability confirmation.
+	// It arrives as a barrier-bound crossing, so every instance calls this at the
+	// same tick — which is what makes the confirmed set a legal succession input.
+	OnReachable func(participant uint32)
 
 	// OnPeerLost reports a direct neighbour's departure to the session layer,
 	// beside the identity release OnDeparture does. It is a different question:
