@@ -6,8 +6,25 @@ import "time"
 // a periodic value sync whose interval trades freshness against traffic.
 const (
 	// NetworkBarrierDelayTicks gives an artifact 150ms to reach every participant.
-	// The session carries this value so a higher-latency deployment can negotiate more.
+	// It is the floor and the default: a session with nothing measured, and a
+	// session on a link faster than this, both use it. The negotiated value travels
+	// in the offer and the handoff record.
 	NetworkBarrierDelayTicks = 3
+
+	// NetworkBarrierMaxDelayTicks is one second, and bounds what a measurement may
+	// ask for. Past this the lead has stopped being an interpolation buffer and
+	// become input latency the player feels on every remote actor; a link that
+	// wants more is one the cadence controller should be reporting rather than one
+	// the barrier should be absorbing. Missing the lead is survivable — §3.2's
+	// fences make a late artifact harmless — so the ceiling errs toward the
+	// responsive side.
+	NetworkBarrierMaxDelayTicks = 20
+
+	// NetworkBarrierJitterMargin multiplies the measured variation added on top of
+	// the one-way estimate. Two is the usual reordering allowance: it covers the
+	// tail of an ordinary distribution without letting one outlier set the lead
+	// for the session.
+	NetworkBarrierJitterMargin = 2
 
 	// NetworkSyncTicks is the period between owner-authored state syncs (D-13).
 	// One cursor's payload is small; this keeps remote presentation responsive.
@@ -314,6 +331,18 @@ const (
 	// convergence floor, which is the window the session already promises a whole
 	// authoritative world inside.
 	NetworkSuccessionTicks = SnapshotFloorKeyframeTicks
+
+	// NetworkAdvertiseHold is how long a confirmed address waits before the
+	// authority publishes it, and it is the other half of the window a guest is
+	// warned about. A participant that quits inside it has shared nothing, which is
+	// what makes the warning true rather than a courtesy.
+	NetworkAdvertiseHold = 5 * time.Second
+
+	// NetworkRejoinPassInterval paces a survivor's walk down the succession list. A
+	// pass tries every candidate once; this is the pause before the list is walked
+	// again, so a successor that is merely slow is retried without the list
+	// becoming a spin.
+	NetworkRejoinPassInterval = time.Second
 
 	// NetworkMigrationBadgeTicks is how long the status bar shows MIGRATING after
 	// a handoff is adopted. The badge marks a transition rather than a state, so
