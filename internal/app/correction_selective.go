@@ -1,30 +1,3 @@
-// The correction as an exchange rather than a broadcast.
-//
-// A whole correction is one-directional and self-sufficient: the host reads its
-// world and sends a body, and a receiver either applies it or waits for the next.
-// That remains the floor; this is the cheaper exchange in front of it.
-//
-//	host                                  guest
-//	 |  manifest (root + section hashes)    |
-//	 |------------------------------------->|  index own world, compare roots
-//	 |                                      |
-//	 |  request: converged, or page hashes  |
-//	 |<-------------------------------------|
-//	 |                                      |
-//	 |  shard set: only mismatching pages   |
-//	 |------------------------------------->|  splice, verify root, install
-//
-// The descent happens where the content is: the guest sends its own page hashes for
-// the sections that disagreed, so the host compares against content it already holds
-// and answers in one round trip. Asking for the host's page hashes first would cost
-// two.
-//
-// Silence falls back rather than stalls. Every manifest is answered, so a peer that
-// stops answering has an uplink that cannot reach the authority — a relayed
-// participant, or a broken return path — and after SnapshotManifestSilenceCorrections
-// the host sends it the whole body again. No peer is left holding an index it cannot
-// act on.
-
 package app
 
 import (
@@ -40,12 +13,9 @@ import (
 )
 
 // retainedCapture is one published capture and its index, kept so the host can
-// answer a request that names it.
-//
-// Retention is what makes the round trip sound: the guest compares against the
-// manifest for tick T and the host must answer from the capture at tick T, not
-// from whatever it holds when the request arrives. A request naming a tick that
-// has fallen out of the ring is answered with a keyframe.
+// answer a request naming it: the guest compared against the manifest for tick T,
+// so the answer must come from the capture at tick T rather than from whatever is
+// held when the request lands. A tick out of the ring is answered with a keyframe.
 type retainedCapture struct {
 	tick  uint64
 	term  network.AuthorityTerm
@@ -61,34 +31,19 @@ type retainedCapture struct {
 }
 
 // pendingRequest is one receiver's answer to a manifest, waiting to be served.
-//
-// Requests are queued rather than served on arrival because they arrive under the
-// world lock, inside the tick that drained the frame, and building a repair means
-// hashing and compressing. Both belong outside the lock, so this holds bytes and
-// nothing else.
+// Requests arrive under the world lock, inside the tick that drained the frame, and
+// building a repair hashes and compresses — so they are queued as bytes and served
+// outside the lock.
 type pendingRequest struct {
 	from uint32
 	body []byte
 }
 
-// awaitingRepair is the state a receiver keeps between sending a request and the
-// repair arriving: the capture it compared, the index over it, and the manifest it
-// is answering.
-//
-// A bounded few are outstanding at once, because a cadence can elapse between the
-// request and the repair and the receiver has answered a newer manifest by then.
-// Holding only the newest cost a repair for every round trip longer than one
-// cadence — measured at about a fifth of them over a real socket — and each of
-// those is a cadence of freshness spent on nothing.
-//
-// What the several entries do *not* do is combine. Each is a whole baseline with
-// its own capture, index and root, a repair is matched to exactly one of them by
-// tick, and applying one drops it and everything older — so a repair is spliced
-// into the state its manifest described and no other, and an older repair that
-// arrives after a newer one has landed matches nothing and is refused. That is
-// "a newer repair may replace an older incomplete one, never combine with it
-// accidentally", with the replacement made explicit rather than implied by there
-// being room for one.
+// awaitingRepair is what a receiver keeps between sending a request and the repair
+// arriving: the capture it compared, the index over it, and the manifest it answers.
+// A bounded few are outstanding, because a round trip longer than one cadence is
+// about a fifth of them. They never combine: a repair matches exactly one entry by
+// tick, and applying it drops that entry and everything older.
 type awaitingRepair struct {
 	tick     uint64
 	capture  snapshot.SharedCapture
@@ -98,17 +53,10 @@ type awaitingRepair struct {
 }
 
 // selectiveState is the exchange half of the correction protocol, on whichever side
-// this run turns out to be.
-//
-// The whole of it is covered by selectiveMu rather than by publishMu, and that is
-// a lock-order rule rather than a preference. The established order in this file
-// is publishMu, then the world lock: readWorld and takeKeyframe are called with
-// the publication schedule held and acquire the world lock themselves. Inbound
-// frames arrive the other way round — under the world lock, from the tick that
-// drained them — so a queue they append to may not sit behind publishMu, or a pump
-// reading the world and a tick taking a request would each hold what the other is
-// waiting for. selectiveMu is taken either with no world lock or with the world
-// lock already held, and never while acquiring one.
+// this run turns out to be. selectiveMu rather than publishMu covers it, and that is
+// a lock-order rule: the order here is publishMu then the world lock, and inbound
+// frames arrive the other way round, so a queue they append to may not sit behind
+// publishMu. selectiveMu is never taken while acquiring the world lock.
 type selectiveState struct {
 	// Host: the retention ring and the request queue.
 	retained []retainedCapture
@@ -123,13 +71,10 @@ type selectiveState struct {
 	awaiting  []*awaitingRepair
 
 	// forward is the newest manifest this instance has answered and not yet passed
-	// on, held until it can actually serve the tick the manifest names.
-	//
-	// Forwarding earlier would be forwarding a question this instance cannot
-	// answer: a relay that has itself asked for a repair does not hold that tick
-	// yet, so a request coming back for it would be refused and the participant
-	// behind would degrade for no reason. Waiting one exchange costs the relayed
-	// participant a cadence of freshness and buys it the whole selective path.
+	// on, held until it can serve the tick that manifest names. Forwarding earlier
+	// would forward a question this instance cannot answer, and the participant
+	// behind would degrade for no reason; waiting one exchange buys it the whole
+	// selective path for a cadence of freshness.
 	forward     []byte
 	forwardTick uint64
 	forwardFrom uint32
@@ -148,17 +93,10 @@ type selectiveState struct {
 
 // === host: publishing the index ===
 
-// publishManifest sends the index for one capture to the peers that are in the
-// selective protocol, and returns the due peers it did not reach.
-//
-// Those are what the caller owes a whole body: a peer skipped here has not
-// answered a manifest recently enough to be repaired selectively, or its link
-// refused the frame, and either way the index alone would leave it holding
-// nothing it can act on. Naming them rather than reporting a bare "some peer was
-// missed" is what keeps the two decisions one decision — the skip is recorded
-// where it is made, so no second pass can re-derive it from state this one has
-// already moved on.
-//
+// publishManifest sends the index for one capture to the peers in the selective
+// protocol and returns the due peers it did not reach — the ones the caller owes a
+// whole body, because the index alone would leave them holding nothing they can act
+// on. Naming them here keeps the skip recorded where it is made.
 // Caller MUST hold publishMu, and MUST NOT hold the world lock.
 func (c *corrections) publishManifest(port engine.NetworkPort, index *snapshot.Manifest, due []uint32) ([]uint32, error) {
 	started := time.Now() // [wall] telemetry only; outside the world lock
@@ -174,8 +112,8 @@ func (c *corrections) publishManifest(port engine.NetworkPort, index *snapshot.M
 	}
 	tick := index.Summary().Header.Tick
 
-	m := c.a.snapshotTelemetry
-	m.hashUS.Store(time.Since(started).Microseconds())
+	m := c.a.telemetry
+	m.HashUS.Store(time.Since(started).Microseconds())
 
 	var missed []uint32
 	sent := 0
@@ -201,8 +139,8 @@ func (c *corrections) publishManifest(port engine.NetworkPort, index *snapshot.M
 		missed = append(missed, id)
 	}
 	if sent > 0 {
-		m.manifestSent.Add(1)
-		m.manifestBytesSent.Add(int64(len(body) * sent))
+		m.ManifestSent.Add(1)
+		m.ManifestBytesSent.Add(int64(len(body) * sent))
 		c.recordSelectiveSizeLocked(len(body))
 	}
 	return missed, nil
@@ -218,7 +156,7 @@ func (c *corrections) retainLocked(cap snapshot.SharedCapture, index *snapshot.M
 	if n := len(c.selective.retained); n > parameter.SnapshotManifestRetention {
 		c.selective.retained = append(c.selective.retained[:0], c.selective.retained[n-parameter.SnapshotManifestRetention:]...)
 	}
-	c.a.snapshotTelemetry.relayRetained.Store(int64(len(c.selective.retained)))
+	c.a.telemetry.RelayRetained.Store(int64(len(c.selective.retained)))
 }
 
 // retain is retainLocked for a caller that holds no lock, which is every receiver
@@ -231,14 +169,10 @@ func (c *corrections) retain(cap snapshot.SharedCapture, index *snapshot.Manifes
 }
 
 // retentionEvidence is what this instance can prove it holds: the newest
-// authoritative tick it has an index over, and how many such records it has.
-//
-// It is the succession's requirement (b), and the reason it reads the retained
-// ring rather than taking a capture is that a fresh capture proves only what the
-// candidate believes. A record is in this ring only because its root was the
-// authority's — the capture arrived whole and passed its integrity hash, or the
-// receiver's own index reproduced the authority's root — so the ring is evidence
-// about the session rather than about the instance.
+// authoritative tick it has an index over, and how many such records. It reads the
+// ring rather than taking a capture because a fresh capture proves only what the
+// candidate believes — a record is in the ring only because its root was the
+// authority's, so the ring is evidence about the session.
 func (c *corrections) retentionEvidence() (uint64, int) {
 	c.publishMu.Lock()
 	defer c.publishMu.Unlock()
@@ -249,15 +183,11 @@ func (c *corrections) retentionEvidence() (uint64, int) {
 	return newest, len(c.selective.retained)
 }
 
-// retainInstalled records the index over a capture this instance has just
-// installed whole, so it can answer for the authority afterwards.
-//
-// This is the primitive authority succession rests on. A successor needs it to
-// prove its world is at least as new as the last artifact the old authority
-// published; a relay needs it to answer a request for a participant behind it. In
-// both cases what makes the record usable is that the capture *is* the
-// authority's, byte for byte — a whole correction re-checks its own integrity hash
-// before it installs — so an index built over it carries the authority's root.
+// retainInstalled records the index over a capture this instance just installed
+// whole, so it can answer for the authority afterwards. A successor proves its world
+// is as new as the last artifact the old authority published; a relay answers for a
+// participant behind it. Both work because the capture is the authority's byte for
+// byte, so an index over it carries the authority's root.
 func (c *corrections) retainInstalled(cap snapshot.SharedCapture) {
 	if cap.Header.Term == 0 {
 		return // not an authoritative artifact: nothing to answer for
@@ -281,12 +211,9 @@ func (c *corrections) retainedAtLocked(tick uint64) (retainedCapture, bool) {
 
 // === host: serving a repair ===
 
-// serveRequests answers every queued request.
-//
-// It runs between two ticks, on whatever drives this instance: a driven host
-// reaches it from Tick and an interactive one from the pump. Nothing here holds
-// the world lock — the captures being compared were read on the cadence and the
-// hashing was done then.
+// serveRequests answers every queued request, between two ticks, on whatever drives
+// this instance. Nothing here holds the world lock: the captures being compared were
+// read on the cadence and hashed then.
 func (c *corrections) serveRequests() {
 	c.selectiveMu.Lock()
 	pending := c.selective.requests
@@ -304,18 +231,18 @@ func (c *corrections) serveRequests() {
 // serveOne answers one request, falling back to a keyframe whenever a repair
 // cannot be built or would not be worth building.
 func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) {
-	m := c.a.snapshotTelemetry
+	m := c.a.telemetry
 	req, err := snapshot.DecodeCorrectionRequest(pending.body)
 	if err != nil {
-		m.shardsRefused.Add(1)
+		m.ShardsRefused.Add(1)
 		vlog.Debug("app", "msg", "correction request refused",
 			"peer", pending.from, "error", err.Error())
 		return
 	}
-	m.requestBytes.Add(int64(len(pending.body)))
+	m.RequestBytes.Add(int64(len(pending.body)))
 
 	if !c.a.admitArtifactTerm(req.Term, pending.from) {
-		m.shardsRefused.Add(1)
+		m.ShardsRefused.Add(1)
 		return
 	}
 	c.publishMu.Lock()
@@ -328,7 +255,7 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 	}
 	if req.Version != snapshot.ManifestVersion || req.Schema != snapshot.Schema {
 		c.publishMu.Unlock()
-		m.shardsRefused.Add(1)
+		m.ShardsRefused.Add(1)
 		vlog.Debug("app", "msg", "correction request refused",
 			"peer", pending.from, "version", req.Version, "schema", req.Schema)
 		return
@@ -366,11 +293,11 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 		c.sendKeyframeTo(port, pending.from, req.Tick)
 		return
 	}
-	m.shardsRequested.Add(int64(countRequestedPages(req)))
+	m.ShardsRequested.Add(int64(countRequestedPages(req)))
 	set, pages, err := snapshot.BuildShardSet(held.index, req)
 	c.publishMu.Unlock()
 	if err != nil {
-		m.shardsRefused.Add(1)
+		m.ShardsRefused.Add(1)
 		vlog.Debug("app", "msg", "repair not built",
 			"peer", pending.from, "tick", req.Tick, "error", err.Error())
 		c.sendKeyframeTo(port, pending.from, req.Tick)
@@ -379,29 +306,22 @@ func (c *corrections) serveOne(port engine.NetworkPort, pending pendingRequest) 
 
 	body, err := snapshot.EncodeShardSet(set)
 	if err != nil || !c.repairIsWorthSending(len(body)) {
-		// A repair this wide is not repairing anything: past the frame bound it
-		// does not fit, and past the measured keyframe size the whole world is
-		// smaller and needs no round trip to have been asked for. What that says
-		// about the peer is that its prediction is not tracking — a storm moves
-		// the entire shared population every cadence, and no index makes that
-		// cheap — so the peer is dropped out of the exchange for a few
-		// publications and served the whole body instead, which is the cheapest
-		// thing anyone has for a receiver that has diverged wholesale. This
-		// correction is still answered — with the whole world, which is what the
-		// peer needs and what it would otherwise wait a cadence for — and the
-		// index is tried again afterwards, because the condition is the world's
-		// rather than the peer's and it ends when the storm does.
-		m.keyframeFallback.Add(1)
+		// A repair this wide is not repairing anything: past the frame bound it does
+		// not fit, and past the measured keyframe size the whole world is smaller.
+		// The peer is dropped out of the exchange for a few publications and served
+		// whole bodies, then tried again — the condition is the world's rather than
+		// the peer's and it ends when the storm does.
+		m.KeyframeFallback.Add(1)
 		c.widenLocked(pending.from)
 		c.sendKeyframeTo(port, pending.from, req.Tick)
 		return
 	}
 	if port == nil || !port.Send(pending.from, uint8(network.MsgStateShard), body) {
-		m.shardsRefused.Add(1)
+		m.ShardsRefused.Add(1)
 		return
 	}
-	m.shardsSent.Add(int64(pages))
-	m.shardBytesSent.Add(int64(len(body)))
+	m.ShardsSent.Add(int64(pages))
+	m.ShardBytesSent.Add(int64(len(body)))
 	c.publishMu.Lock()
 	c.recordSelectiveSizeLocked(len(body))
 	c.publishMu.Unlock()
@@ -420,13 +340,9 @@ func (c *corrections) widenLocked(id uint32) {
 }
 
 // repairIsWorthSending reports whether a repair of this size is still cheaper than
-// the whole world it stands in for.
-//
-// Two bounds, and they answer different questions. SnapshotShardBytesMax is the
-// protocol's: past it a repair no longer fits one transport frame. The measured
-// keyframe size is the session's: a repair wider than the capture it is repairing
-// toward has stopped being an optimisation, and the fallback is what keeps the
-// selective path from ever costing more than the whole-body stream it replaced.
+// the whole world it stands in for. Two bounds: SnapshotShardBytesMax is the
+// protocol's, past which a repair no longer fits one frame, and the measured
+// keyframe size is the session's, past which it has stopped being an optimisation.
 func (c *corrections) repairIsWorthSending(bytes int) bool {
 	if bytes > parameter.SnapshotShardBytesMax || bytes > network.MaxPayloadSize {
 		return false
@@ -447,16 +363,11 @@ func countRequestedPages(req snapshot.CorrectionRequest) int {
 	return n
 }
 
-// sendKeyframeTo pushes a whole compressed capture at one peer. It is the bounded
-// fallback every refusal in this protocol reaches.
-//
-// minTick is the tick the receiver was asking about, and the keyframe has to be at
-// least that fresh. The retained baseline usually is not: it is the last *whole*
-// world this host published, which on a healthy link is up to a keyframe period
-// old, and a receiver refuses an authority it has already moved past. So a stale
-// baseline is refreshed by reading the world — the one place in this protocol that
-// pays a capture outside the cadence, and only on a path that has already given up
-// on repairing selectively.
+// sendKeyframeTo pushes a whole compressed capture at one peer: the bounded fallback
+// every refusal in this protocol reaches. minTick is what the receiver asked about
+// and the keyframe must be at least that fresh, so a stale baseline is refreshed by
+// reading the world — the one capture this protocol pays outside the cadence, and
+// only after it has given up on repairing selectively.
 func (c *corrections) sendKeyframeTo(port engine.NetworkPort, id uint32, minTick uint64) {
 	if port == nil {
 		return
@@ -493,21 +404,18 @@ func (c *corrections) sendKeyframeTo(port engine.NetworkPort, id uint32, minTick
 	}
 	// Counted where every other correction body is: a fallback is not free, and a
 	// wire total that omitted it would flatter the protocol that provoked it.
-	c.a.snapshotTelemetry.sentBytes.Add(int64(len(body)))
-	c.a.snapshotTelemetry.keyframeFallback.Add(1)
+	c.a.telemetry.SentBytes.Add(int64(len(body)))
+	c.a.telemetry.KeyframeFallback.Add(1)
 	vlog.Debug("app", "msg", "keyframe fallback sent",
 		"peer", id, "tick", cap.Header.Tick, "bytes", len(body))
 }
 
 // === guest: answering the index ===
 
-// applySelective drains whatever selective traffic has arrived and returns the
-// capture a repair produced, if one did.
-//
-// The order is deliberate: a repair that has arrived is applied before a newer
-// manifest is answered, because the repair is state and the manifest is only a
-// question. A manifest newer than the repair being awaited then supersedes it, so
-// nothing older is ever installed after something newer.
+// applySelective drains whatever selective traffic has arrived. The order is
+// deliberate: an arrived repair is applied before a newer manifest is answered,
+// because the repair is state and the manifest only a question. A newer manifest
+// then supersedes the awaited repair, so nothing older lands after something newer.
 func (c *corrections) applySelective() {
 	c.selectiveMu.Lock()
 	manifests := c.selective.manifests
@@ -574,28 +482,28 @@ func (c *corrections) holdsRetention(tick uint64) bool {
 // answerManifest indexes this instance's own world against one manifest and
 // answers it.
 func (c *corrections) answerManifest(body []byte, arrived int64) uint64 {
-	m := c.a.snapshotTelemetry
-	m.manifestRecv.Add(arrived)
-	m.manifestBytesRecv.Add(int64(len(body)))
+	m := c.a.telemetry
+	m.ManifestRecv.Add(arrived)
+	m.ManifestBytesRecv.Add(int64(len(body)))
 
 	want, err := snapshot.DecodeManifest(body)
 	if err != nil {
-		m.baselineRefusals.Add(1)
+		m.BaselineRefusals.Add(1)
 		vlog.Debug("app", "msg", "manifest refused", "error", err.Error())
 		return 0
 	}
 	from := c.selectiveSource()
 	if !c.a.admitArtifactTerm(want.Header.Term, from) {
-		m.baselineRefusals.Add(1)
+		m.BaselineRefusals.Add(1)
 		return 0
 	}
 	if want.Version != snapshot.ManifestVersion || want.Header.Schema != snapshot.Schema {
-		m.baselineRefusals.Add(1)
+		m.BaselineRefusals.Add(1)
 		c.requestKeyframe(from, want)
 		return 0
 	}
 	if err := c.a.verifyCaptureIdentity(want.Header); err != nil {
-		m.baselineRefusals.Add(1)
+		m.BaselineRefusals.Add(1)
 		vlog.Debug("app", "msg", "manifest describes another session", "error", err.Error())
 		return 0
 	}
@@ -619,9 +527,9 @@ func (c *corrections) answerManifest(body []byte, arrived int64) uint64 {
 	}
 	req, sections, pages := snapshot.CompareRequest(index, want)
 	req.Term = want.Header.Term
-	m.hashUS.Store(time.Since(started).Microseconds())
-	m.sectionsCompared.Add(int64(sections))
-	m.pagesCompared.Add(int64(pages))
+	m.HashUS.Store(time.Since(started).Microseconds())
+	m.SectionsCompared.Add(int64(sections))
+	m.PagesCompared.Add(int64(pages))
 
 	if c.selective.wantKeyframe {
 		req.Keyframe = true
@@ -636,7 +544,7 @@ func (c *corrections) answerManifest(body []byte, arrived int64) uint64 {
 		// The header still does — the authority's tick, run and map bounds are what
 		// an install adopts, and a guest that kept its own would keep predicting
 		// from a clock the session has moved past.
-		m.hashOnly.Add(1)
+		m.HashOnly.Add(1)
 		mine.Header = want.Header
 		if integrity, err := snapshot.Integrity(mine); err == nil {
 			mine.Header.Integrity = integrity
@@ -679,39 +587,37 @@ func (c *corrections) takeAwaiting(tick uint64) *awaitingRepair {
 	return nil
 }
 
-// applyRepair validates and installs one shard set.
-//
-// Nothing is written anywhere until the whole set has passed validation and the
-// repaired capture has reproduced the set's root. A failure at either point leaves
-// the awaited state untouched and asks for a keyframe, which is the one answer
-// that cannot itself fail for the same reason.
+// applyRepair validates and installs one shard set. Nothing is written until the
+// whole set has passed validation and the repaired capture has reproduced the set's
+// root; a failure at either point leaves the awaited state untouched and asks for a
+// keyframe, the one answer that cannot fail the same way.
 func (c *corrections) applyRepair(body []byte) {
-	m := c.a.snapshotTelemetry
-	m.shardBytesRecv.Add(int64(len(body)))
+	m := c.a.telemetry
+	m.ShardBytesRecv.Add(int64(len(body)))
 
 	set, err := snapshot.DecodeShardSet(body)
 	if err != nil {
-		m.shardsRefused.Add(1)
+		m.ShardsRefused.Add(1)
 		vlog.Debug("app", "msg", "repair refused", "error", err.Error())
 		return
 	}
-	m.shardsRecv.Add(int64(len(set.Shards)))
+	m.ShardsRecv.Add(int64(len(set.Shards)))
 
 	if !c.a.admitArtifactTerm(set.Header.Term, set.Served) {
-		m.shardsRefused.Add(1)
+		m.ShardsRefused.Add(1)
 		return
 	}
 	awaiting := c.takeAwaiting(set.Header.Tick)
 	if awaiting == nil {
-		m.baselineRefusals.Add(1)
-		m.shardsRefused.Add(1)
+		m.BaselineRefusals.Add(1)
+		m.ShardsRefused.Add(1)
 		vlog.Debug("app", "msg", "repair names a baseline this instance has moved past",
 			"repair_tick", set.Header.Tick)
 		return
 	}
 	if err := snapshot.ValidateShardSet(set, awaiting.tick, awaiting.manifest.Authority, awaiting.manifest.Root, awaiting.manifest.Header); err != nil {
-		m.proofFailures.Add(1)
-		m.shardsRefused.Add(1)
+		m.ProofFailures.Add(1)
+		m.ShardsRefused.Add(1)
 		vlog.Warn("app", "msg", "repair failed its proof", "error", err.Error())
 		c.requestKeyframe(awaiting.from, awaiting.manifest)
 		return
@@ -723,8 +629,8 @@ func (c *corrections) applyRepair(body []byte) {
 	index := awaiting.index
 	rep, err := snapshot.ApplyShardSet(&repaired, index, set)
 	if err != nil {
-		m.proofFailures.Add(1)
-		m.shardsRefused.Add(1)
+		m.ProofFailures.Add(1)
+		m.ShardsRefused.Add(1)
 		vlog.Warn("app", "msg", "repair did not verify", "error", err.Error())
 		c.requestKeyframe(awaiting.from, awaiting.manifest)
 		return
@@ -739,10 +645,10 @@ func (c *corrections) applyRepair(body []byte) {
 	// Installing may be what finally lets this instance answer for the tick it is
 	// holding a manifest to forward for.
 	c.flushForward()
-	m.shardsApplied.Add(int64(rep.Pages))
-	m.pagesRepaired.Add(int64(rep.Pages))
-	m.entitiesRepaired.Add(int64(rep.Entities))
-	m.cellsRepaired.Add(int64(rep.Rows))
+	m.ShardsApplied.Add(int64(rep.Pages))
+	m.PagesRepaired.Add(int64(rep.Pages))
+	m.EntitiesRepaired.Add(int64(rep.Entities))
+	m.CellsRepaired.Add(int64(rep.Rows))
 	vlog.Debug("app", "msg", "repair applied",
 		"tick", repaired.Header.Tick, "pages", rep.Pages,
 		"sections", rep.Sections, "cells", rep.Rows)
@@ -755,7 +661,7 @@ func (c *corrections) requestKeyframe(from uint32, want snapshot.CorrectionManif
 	c.selective.wantKeyframe = true
 	c.selective.awaiting = nil
 	c.selectiveMu.Unlock()
-	c.a.snapshotTelemetry.keyframeFallback.Add(1)
+	c.a.telemetry.KeyframeFallback.Add(1)
 	c.sendRequest(from, snapshot.CorrectionRequest{
 		Version:  snapshot.ManifestVersion,
 		Schema:   snapshot.Schema,
@@ -791,7 +697,7 @@ func (c *corrections) sendRequest(from uint32, req snapshot.CorrectionRequest) {
 	if !port.Send(from, uint8(network.MsgStateRequest), body) {
 		return
 	}
-	c.a.snapshotTelemetry.requestBytes.Add(int64(len(body)))
+	c.a.telemetry.RequestBytes.Add(int64(len(body)))
 }
 
 // selectiveSource is the participant a receiver answers: the peer its manifests
@@ -850,15 +756,9 @@ func (c *corrections) clearKeyframeWait() {
 }
 
 // recordSelectiveSizeLocked prices the schedule from what the selective protocol
-// actually puts on the wire.
-//
-// The controller's Delta figure is what a non-keyframe correction costs, and a
-// non-keyframe correction is now a manifest plus whatever repair it provoked. It
-// is deliberately blended into the same field rather than added beside it: the
-// controller's cost model is "keyframe, and the other thing", and giving it a
-// third number would let a schedule be priced from a shape it does not send.
-//
-// Caller MUST hold publishMu.
+// puts on the wire: a non-keyframe correction is a manifest plus whatever repair it
+// provoked, blended into the controller's Delta figure rather than added beside it.
+// Its cost model is "keyframe, and the other thing". Caller MUST hold publishMu.
 func (c *corrections) recordSelectiveSizeLocked(bytes int) {
 	const smoothing = 0.25
 	if bytes <= 0 {
@@ -872,13 +772,13 @@ func (c *corrections) recordSelectiveSizeLocked(bytes int) {
 	if c.sizes.Keyframe > 0 {
 		c.haveSizes = true
 	}
-	c.a.snapshotTelemetry.selectiveBytes.Store(c.sizes.Delta)
+	c.a.telemetry.SelectiveBytes.Store(c.sizes.Delta)
 }
 
 // localParticipant is this instance's session identity, zero outside a session.
 func (a *App) localParticipant() uint32 {
 	var id uint32
-	a.world.RunSafe(func() { id = a.localParticipantLocked() })
+	a.world.RunSafe(func() { id = a.world.LocalParticipant() })
 	return id
 }
 
