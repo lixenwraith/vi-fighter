@@ -25,6 +25,7 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/render"
 	"github.com/lixenwraith/vi-fighter/internal/resource"
 	"github.com/lixenwraith/vi-fighter/internal/service"
+	"github.com/lixenwraith/vi-fighter/internal/snapshot"
 	"github.com/lixenwraith/vi-fighter/internal/system"
 	"github.com/lixenwraith/vi-fighter/internal/vlog"
 )
@@ -122,11 +123,11 @@ type App struct {
 	// with the App rather than with the session because a run can open one later
 	// with :host, and a budget that started when hosting did would be a budget
 	// reset by whatever closed the last session.
-	admissions *admissionLimiter
+	admissions *network.AdmissionLimiter
 
-	// snapshotTelemetry is reserved during construction so a capture or an install
-	// can publish its cost into a registry that is frozen by then.
-	snapshotTelemetry snapshotTelemetry
+	// telemetry is reserved during construction so a capture or an install can
+	// publish its cost into a registry that is frozen by then.
+	telemetry snapshot.Telemetry
 
 	// corrections is the authority half of a session: the host's publication
 	// cadence or a guest's apply loop, whichever this run turns out to be. It
@@ -164,7 +165,7 @@ func New(cfg Config) (*App, error) {
 	a := &App{
 		cfg:        cfg,
 		hub:        service.NewHub(),
-		admissions: newAdmissionLimiter(),
+		admissions: network.NewAdmissionLimiter(),
 		life:       lifecycle.New(cfg.Lifetime),
 	}
 	// Before init, because initWorld binds the correction queue to whatever
@@ -339,7 +340,7 @@ func (a *App) initWorld() {
 	service.MustGet[*service.ContentService](a.hub, "content").
 		PublishStatus(a.world.Resources.Status)
 	ensureAuthorityCells(a.world.Resources.Status)
-	a.snapshotTelemetry = newSnapshotTelemetry(a.world.Resources.Status)
+	a.telemetry = snapshot.NewTelemetry(a.world.Resources.Status)
 	a.authority = newAuthority(a)
 	a.reach = newReach(a)
 
@@ -365,13 +366,8 @@ func (a *App) initWorld() {
 
 // applyMapLatch installs this run's D-14 position before any system is built and
 // before the FSM boot script spawns cursor slot zero at the centre of the map.
-// Adopting bounds later would leave that shared cursor on this terminal's centre
-// rather than the session's, which is a shared position no crossing ever corrects.
-//
-// LockMap latches the world as shared, which closes the crop path and engages the
-// playout barrier for the whole run; a reproduction of a session — a join, a
-// catch-up or a replay — additionally carries the bounds it must start on. A
-// hosting run keeps its own terminal's bounds and only stops deriving them.
+// LockMap alone closes the crop path and engages the playout barrier; a run
+// reproducing a session also carries the bounds it must start on.
 func (a *App) applyMapLatch() {
 	if a.cfg.LockMap {
 		a.world.MarkSessionShared()
@@ -519,7 +515,7 @@ func (a *App) Close() {
 	a.reach.close()
 	a.closeProbe()
 	a.closeMidRunPort()
-	a.closeStagingWorld()
+	a.discardStagingWorld()
 	a.hub.StopAll()
 
 	if a.recorder != nil {
