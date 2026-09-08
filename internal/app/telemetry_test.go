@@ -87,7 +87,7 @@ func persistentTelemetryKey(kind, key string) bool {
 	// This instance's own listening port and the addresses it holds belong to the
 	// session too: a reset starts a new run inside it and does not unbind a socket
 	// or forget where the other participants are.
-	case "network.listening", "network.reachable":
+	case "network.listening", "network.chain":
 		return true
 	}
 	switch kind {
@@ -335,14 +335,10 @@ func TestTelemetryGroupsFitDebugCards(t *testing.T) {
 	}
 }
 
-// TestEveryParticipantsResourcesAreReported is the multi-cursor half of the
-// resource telemetry.
-//
-// Every owner-authored publisher wrote only the cursor it authored, so a peer's
-// player.<slot>.* keys were published by nobody, and the bare keys — which mirror
-// one slot — were therefore empty on every guest. The passive drain looked stopped
-// on the one surface a player reads while it was running the whole time. Both
-// halves are checked here: each instance reports every slot, and each instance's
+// TestEveryParticipantsResourcesAreReported is the multi-cursor half of the resource
+// telemetry. Every owner-authored publisher wrote only the cursor it authored, so a
+// peer's player.<slot>.* keys were published by nobody and the bare keys were empty
+// on every guest. Both halves are checked: each instance reports every slot, and its
 // bare key names the cursor it drives rather than slot zero's.
 func TestEveryParticipantsResourcesAreReported(t *testing.T) {
 	t.Parallel()
