@@ -226,7 +226,9 @@ fleet-log mount or PV/PVC, and no host account mapped to numeric UID/GID 65532.
 The provisional 256 MiB tmpfs is about 3.2% of node RAM and is accepted until H3
 replaces the estimate with a ten-session measurement. The same systemd artifacts
 and commands support a bare Ubuntu K3s node; distribution package names are split
-in `deploy/guest/README.md`.
+in `deploy/guest/README.md`. That procedure first verifies the exact deployment
+revision contains every Batch B artifact, before any privileged copy or service
+operation.
 
 1. Record `free -h`, the K3s node name, and the filesystem ownership expected by
    UID/GID 65532. Put placeholders, never machine IPs, in repository docs.

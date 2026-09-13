@@ -36,6 +36,29 @@ procedure disables Docker, its socket, and its system containerd again.
 
 ## Batch B: volatile fleet-log storage
 
+Run this section from the repository root at the exact revision being deployed.
+For a validation revision that has not reached `main`, fetch and switch to that
+revision before opening the maintenance window. Prove every Batch B source
+artifact is present before any privileged copy or service operation:
+
+```sh
+test "$(pwd -P)" = "$(git rev-parse --show-toplevel)"
+for artifact in \
+  'deploy/guest/var-log-vif\x2dfleet.mount' \
+  deploy/guest/k3s.service.d/10-vif-fleet-logs.conf \
+  deploy/guest/vif-fleet-log-cleanup.py \
+  deploy/guest/vif-fleet-log-cleanup.service \
+  deploy/guest/vif-fleet-log-cleanup.timer \
+  deploy/k3s/05-log-volume.yaml \
+  deploy/k3s/06-log-volume-check.yaml
+do
+  test -r "$artifact" || {
+    printf 'missing Batch B artifact: %s\n' "$artifact" >&2
+    false
+  }
+done
+```
+
 This is a maintenance operation. Announce it, keep both allocators and operators
 from creating sessions, and verify the fleet-object query is empty before
 continuing. K3s restarts once after the mount dependency is installed.
