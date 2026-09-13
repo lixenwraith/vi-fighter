@@ -95,7 +95,8 @@ Verify the mount and dependency before creating Kubernetes storage objects:
 ```sh
 systemctl is-active "$MOUNT_UNIT" k3s.service vif-allocator.service
 systemctl is-enabled "$MOUNT_UNIT" vif-fleet-log-cleanup.timer
-systemctl show k3s.service -p RequiresMountsFor -p After
+systemctl cat k3s.service
+systemctl show k3s.service -p Requires -p After
 findmnt -no TARGET,FSTYPE,SIZE,OPTIONS /var/log/vif-fleet
 sudo stat -c 'mode=%a uid=%u gid=%g path=%n' /var/log/vif-fleet
 ```
