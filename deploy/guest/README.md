@@ -225,7 +225,7 @@ sudo find /var/log/vif-fleet -mindepth 1 -maxdepth 1 -print
 ```
 
 Both final commands must print nothing. Finish Batch B with the common session
-check in `doc/kube-todo.md` §5; the real workload still writes stdout until Batch
+check in `doc/kube-todo.md` §7; the real workload still writes stdout until Batch
 C.
 
 ## Batch B rollback
@@ -311,7 +311,7 @@ curl --connect-timeout 2 --max-time 5 -fsS \
   http://127.0.0.1:9080/readyz
 ```
 
-Finish with `doc/kube-todo.md` §5. The session Job must have exactly one
+Finish with `doc/kube-todo.md` §7. The session Job must have exactly one
 `session` container, mount the `vif-fleet-logs` claim only there, omit direct
 `hostPath` and `-log-stdout`, and produce `<session-id>.jsonl` whose application
 records all carry the same `fields.session_id`. Delete the Job and its files after
