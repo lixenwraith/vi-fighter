@@ -181,6 +181,12 @@ func (a *App) lobbyQuorum() int {
 // playing on it — which D-14 forbids for the same reason a terminal may not crop a
 // shared map. First is a number the session can commit to before it starts.
 func (a *App) noteJoinerReport(id network.PeerID, report network.JoinerReport) {
+	// The accepted socket's address, on the one instance that has it. It is what
+	// proves a deployment preserved the player's address rather than its gateway's,
+	// and the per-address admission budget is keyed on the same value. Its own sub
+	// is what keeps it out of any stream published from these files.
+	vlog.Info("admit", "msg", "peer admitted", "peer", uint64(id),
+		"remote", report.Remote, "declared", report.Listen)
 	// Before the geometry check: a participant that reported no terminal still
 	// reported a port.
 	a.reach.NoteDeclared(id, report)
