@@ -133,7 +133,7 @@ the level for everything else.
 
 | Scope | Letter | `sub` tags mapped to it |
 |---|---|---|
-| `app` | `a` | `app`, `service`, `race`, `crash` |
+| `app` | `a` | `app`, `admit`, `service`, `race`, `crash` |
 | `fsm` | `f` | `fsm` |
 | `event` | `e` | `event` |
 | `dispatch` | `d` | `dispatch` |
@@ -200,6 +200,20 @@ records is a list that goes stale.
 | `network session active` | INFO | `local`, `slot`, `coordinator`, `barrier_delay_ticks`, `peers` | this instance's one statement of who it is |
 | `session summary` | INFO | `summary` | the `-serve` loop, every 30 s; the same line `:session` prints |
 | `peer link opened` / `peer link lost` | INFO / WARN | `peer`, plus `address` on the dial and `authority_lost`, `remaining_peers` on the loss | `reach.dial`, `NetworkSystem.reportDisconnect` |
+
+### `sub="admit"`
+
+| `msg` | Level | Fields | Source |
+|---|---|---|---|
+| `peer admitted` | INFO | `peer`, `remote`, `declared` | `App.noteJoinerReport`, on the coordinator |
+
+`remote` is the accepted socket's address and `declared` what the peer said it
+listens on. They are here and nowhere else: it is the one value that proves a
+deployment reached the pod with the player's address rather than its gateway's,
+and the per-address admission budget is keyed on it. The sub exists so the fleet's
+published stream can drop the whole category —
+[`deploy/logwisp/aggregator.toml`](../deploy/logwisp/aggregator.toml) excludes it
+beside `TRACE` — while the node-local file keeps it for an operator.
 
 ### `sub="service"`
 
