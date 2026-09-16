@@ -262,15 +262,27 @@ the worst step was 1 tick at zero delay, 4 at one, 8 at two and 16 at four. The
 fastest thing in the world is a knocked-back swarm, which is why that is what a
 guest saw jittering, and why an instance that becomes its own authority stops.
 
-A correction describing a tick this instance has not reached is therefore held
-until it has. The receiver's offset settles on the slowest path rather than chasing
-the fastest, and what a correction then carries is prediction error rather than a
-clock difference — which is also what makes `snapshot.correction_entities` mean
-what §7 says it means. One rule keeps the buffer from becoming a stall: a second
-arrival while one waits takes the step instead of queueing behind it, so at most
-one correction is ever delayed and never by more than a cadence.
-`snapshot.corrections_held` counts the deferrals; a session whose paths deliver
-worlds of one age holds none.
+The clock is therefore pinned from both sides.
+
+A correction describing a tick this instance has not reached is **held** until it
+has. The receiver's offset settles on the slowest path rather than chasing the
+fastest, and what a correction then carries is prediction error rather than a clock
+difference — which is also what makes `snapshot.correction_entities` mean what §7
+says it means. One rule keeps the buffer from becoming a stall: a second arrival
+while one waits takes the step instead of queueing behind it, so at most one
+correction is ever delayed and never by more than a cadence.
+
+A correction describing a tick this instance has *passed* cannot be held — nothing
+is coming to make it current — so installing it hands back simulation already run.
+Left to the pacing, the world re-lives the difference at one tick a frame: the
+rollback and the region flicker a player reports. The receiver instead owes itself
+those ticks and spends them between two ticks, before the next paced one, so the
+clock only ever moves forward. Past `NetworkBarrierMaxDelayTicks` the link is the
+cadence controller's problem rather than a gap to absorb in one frame, and the
+clock stays where the capture put it.
+
+`snapshot.corrections_held` counts the deferrals and `snapshot.catch_up_ticks` the
+last debt spent; a session whose paths deliver worlds of one age has neither.
 
 ## 5. Membership, topology, and authority continuity
 
@@ -675,15 +687,19 @@ entry says what is actually absent rather than what is imperfect, and how to see
     That is one attacker's velocity rather than fifteen cells, and it is in
     `doc/todo.md` as a choice about who owns the override.
 
-    Three ways to close the rest, none of them free:
+    Rolling the receiver's prediction forward is now what §4.1 does, so the
+    *correction* no longer shows the offset by rewinding: the ticks an install gives
+    back are re-run before the next paced one. What the table below still offers is
+    a way to remove the offset itself rather than stop displaying it backwards.
 
     | Option | Cost |
     |---|---|
     | Make a combat crossing `barrierBound` | The lead becomes input latency on every hit — 150 ms at the floor, and up to a second at `NetworkBarrierMaxDelayTicks`. |
     | Lag-compensate the receiver | On applying a crossing the receiver also advances the target by the lead's worth of the impulse it just added, so it lands where the producer already has it. Deterministic — the lead is session identity — but it moves the discontinuity onto the participants who did not act, and the extrapolation is only exact while the target's motion is drag alone. |
-    | Roll the receiver's prediction forward | Exact, and the option §10.3 scored lowest on tractability for this codebase. |
 
-    **To be decided.**
+    **To be decided**, and less pressing than it was: measured over a shaped link,
+    the worst backward step a shared body took on a receiver fell from 68 cells to
+    the 0.4 the same body shows at zero latency.
 
 ## 9. Verification
 
@@ -696,7 +712,8 @@ the identity an explosion's re-derived hits inherit from it, the per-attacker wi
 and additive join that make two participants' knockbacks compose the same way in
 either order, the domain a capture's RNG streams may carry, the placement budget and
 the storm burst a shared stream draws before it reads a live position, the owner-state
-sync an install must not stall, the agreed tick a shared-identity crossing waits for
+sync an install must not stall, the forward-only clock a correction leaves behind it,
+the agreed tick a shared-identity crossing waits for
 on its own producer, and the
 peer link and succession chain rules that make a successor reachable. It also forces a capture to enter and retire a quasar while
 the receiver skips the release transition, and round-trips a delayed transition

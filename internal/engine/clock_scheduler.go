@@ -31,6 +31,11 @@ type ClockScheduler struct {
 	gameStartTime    time.Time // Game session start for elapsed calculation
 	nextTickDeadline time.Time // Next tick deadline for drift correction
 
+	// owedTicks is simulation this world has already lived through and must live
+	// again, because an install adopted an older tick. Paced ticks keep their
+	// schedule; these are extra and run without sleeping between them.
+	owedTicks atomic.Int64
+
 	// Control channels
 	stopChan  chan struct{}
 	stopOnce  sync.Once
@@ -505,6 +510,28 @@ func (cs *ClockScheduler) Prepare() {
 	cs.world.Resources.Status.Freeze()
 }
 
+// RequestCatchUp owes the world n more ticks, to be run before the next paced
+// one. An install that adopts a tick this world has passed would otherwise leave
+// every shared actor to re-live the difference at one tick per frame, which is the
+// rollback a player sees; running it between two ticks makes the clock monotone.
+// Safe from any goroutine: the ticks themselves run on whichever one paces them.
+func (cs *ClockScheduler) RequestCatchUp(n int) {
+	if n > 0 {
+		cs.owedTicks.Add(int64(n))
+		cs.ctl.Nudge() // an interactive loop is asleep until its next deadline
+	}
+}
+
+// runOwedTicks spends the catch-up allowance on the calling goroutine, which is
+// always the one that paces ticks. Pause holds the debt rather than dropping it.
+func (cs *ClockScheduler) runOwedTicks() {
+	for !cs.ctl.IsPaused() && cs.owedTicks.Load() > 0 {
+		cs.owedTicks.Add(-1)
+		cs.drainReset()
+		cs.processTick()
+	}
+}
+
 // RunTicks advances the simulation by n ticks as fast as the caller's goroutine
 // allows. Requires a manual clock: Step is a no-op on the interactive clock
 // while it is running. The caller owns the loop, so Start must not be running —
@@ -513,6 +540,7 @@ func (cs *ClockScheduler) Prepare() {
 // next one, matching the scheduler loop.
 func (cs *ClockScheduler) RunTicks(n int) {
 	cs.Prepare()
+	cs.runOwedTicks()
 	for range n {
 		cs.drainReset()
 		cs.stepTick()
@@ -598,6 +626,10 @@ func (cs *ClockScheduler) schedulerLoop() {
 				// live tick is not owed a burst
 				cs.nextTickDeadline = cs.ctl.Now().Add(cs.tickInterval)
 				wasPaused = false
+			}
+			if cs.owedTicks.Load() > 0 {
+				cs.runOwedTicks()
+				continue // spend the debt without sleeping, as a step allowance does
 			}
 			gameNow := cs.ctl.Now()
 			deadline := cs.nextTickDeadline

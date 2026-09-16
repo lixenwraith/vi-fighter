@@ -31,6 +31,7 @@ type stub struct {
 
 	installed []snapshot.SharedCapture
 	replayed  []snapshot.CaptureHeader
+	caughtUp  uint64
 	handoffs  []adopted
 	abandoned [][]network.RosterEntry
 	said      []string
@@ -92,6 +93,14 @@ func (s *stub) ReplayLocalSuffix(h snapshot.CaptureHeader) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.replayed = append(s.replayed, h)
+}
+
+// CatchUp records what an install gave back; this stub answers with the capture it
+// was handed and never runs a tick, so the debt is only ever counted here.
+func (s *stub) CatchUp(n uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.caughtUp += n
 }
 
 func (s *stub) AuthorityChanged(rec network.HandoffRecord, mine bool) {

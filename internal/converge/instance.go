@@ -46,6 +46,9 @@ type Instance interface {
 	// installed capture does not contain.
 	ReplayLocalSuffix(snapshot.CaptureHeader)
 
+	// CatchUp re-simulates n ticks an install gave back, before the next paced one.
+	CatchUp(n uint64)
+
 	// AuthorityChanged moves the membership a handoff carries into the places the
 	// run reads it from; DropAbandonedCursors removes the participants an instance
 	// left with no link will never hear from again.

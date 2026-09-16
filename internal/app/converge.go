@@ -88,6 +88,8 @@ func (i instance) VerifyCaptureIdentity(h snapshot.CaptureHeader) error {
 
 func (i instance) ReplayLocalSuffix(h snapshot.CaptureHeader) { i.a.replayLocalSuffix(h) }
 
+func (i instance) CatchUp(n uint64) { i.a.scheduler.RequestCatchUp(int(n)) }
+
 func (i instance) AuthorityChanged(rec network.HandoffRecord, mine bool) {
 	i.a.applyAuthorityChange(rec, mine)
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/engine"
 	"github.com/lixenwraith/vi-fighter/internal/event"
 	"github.com/lixenwraith/vi-fighter/internal/input"
+	"github.com/lixenwraith/vi-fighter/internal/network"
 	"github.com/lixenwraith/vi-fighter/internal/parameter"
 	"github.com/lixenwraith/vi-fighter/internal/snapshot"
 )
@@ -1258,5 +1260,44 @@ func TestACorrectionDoesNotStallTheOwnerStateSync(t *testing.T) {
 	if got := rodCharges(host, cursor); got != second {
 		t.Fatalf("host mirror stalled at %d charges after an install rewound the guest, it authored %d",
 			got, second)
+	}
+}
+
+// TestACorrectionNeverMovesAGuestBackward is the playout buffer's other half. An
+// install adopts the capture's tick, so one that reached a guest later than the
+// clock it describes used to hand back simulation the guest had already run — and
+// every shared actor re-lived it at one tick a frame, which is the rollback and the
+// region flicker a player sees. The debt is spent between two ticks instead.
+func TestACorrectionNeverMovesAGuestBackward(t *testing.T) {
+	t.Parallel()
+	for _, latency := range []uint64{4, 8} {
+		t.Run(fmt.Sprintf("latency%d", latency), func(t *testing.T) {
+			t.Parallel()
+			host, guest, _ := shapedPair(t, fixtureSeed, network.LinkShape{LatencyTicks: latency})
+			mirrorCursors(t, host, guest)
+
+			// Sampled where a frame is drawn: after the install and after the tick
+			// that spends what it owed.
+			var prev uint64
+			for range 160 {
+				host.Tick(1)
+				_ = host.corrections.PublishDue()
+				guest.ApplyPendingCorrections()
+				guest.Tick(1)
+				if at := guest.Position().Tick; at < prev {
+					t.Fatalf("guest clock went %d -> %d", prev, at)
+				} else {
+					prev = at
+				}
+			}
+			if statOf(guest, "snapshot.catch_up_ticks") == 0 {
+				t.Fatal("no correction landed off the clock; the assertion above proves nothing")
+			}
+			// Monotonic is not enough on its own: a guest that simply stopped
+			// adopting would be monotonic and permanently behind.
+			if guest.Position().Tick != host.Position().Tick {
+				t.Fatalf("guest ended at tick %d, host at %d", guest.Position().Tick, host.Position().Tick)
+			}
+		})
 	}
 }

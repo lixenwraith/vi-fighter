@@ -146,11 +146,11 @@ same choice as kill credit above.
 - Prerequisite: a decision on input latency, which is a gameplay judgement
 
 An ordinary crossing applies at once on its producer and `BarrierDelayTicks` later
-on the authority, so the first correction after one pulls the target back by that
-much travel — measurably, about 3 cells on a knocked-back swarm at the floored
-lead. Either the crossing becomes barrier-bound, which is 150 ms of latency on
-every hit, or the receiver rolls its prediction forward instead of adopting the
-capture's tick. See [Multiplayer](multi-player.md) §8 item 11.
+on the authority, so the two hold a knocked-back body about a cell apart for the
+lead. The receiver now rolls its prediction forward rather than re-living what an
+install gave back, so a correction no longer *displays* that offset as a pullback;
+removing the offset itself still means making the crossing barrier-bound, which is
+150 ms of latency on every hit. See [Multiplayer](multi-player.md) §8 item 11.
 
 ### Rename the participant identity type
 

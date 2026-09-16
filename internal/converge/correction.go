@@ -944,6 +944,7 @@ func (c *Corrections) install(cap snapshot.SharedCapture) error {
 
 // commit installs one correction whose playout time has come.
 func (c *Corrections) commit(cap snapshot.SharedCapture) error {
+	was := c.inst.Position().Tick
 	diff, err := c.inst.InstallCapture(cap)
 	if err != nil {
 		return err
@@ -956,6 +957,17 @@ func (c *Corrections) commit(cap snapshot.SharedCapture) error {
 	// does not contain go back on top of it. The boundary is the capture's fence for
 	// this source, not its tick — see internal/app/replay_suffix.go for why.
 	c.inst.ReplayLocalSuffix(cap.Header)
+
+	// An install adopts the capture's tick, so one that left this instance behind
+	// the clock it was on has given back simulation it already lived. Re-run it
+	// before the next paced tick: left to the pacing, every shared actor re-lives
+	// the gap at one tick a frame, which is the rollback a player sees. Past the
+	// lead's own ceiling the link is the cadence controller's problem, not a gap to
+	// absorb, so the clock stays where the capture put it.
+	if back := was - cap.Header.Tick; was > cap.Header.Tick && back <= parameter.NetworkBarrierMaxDelayTicks {
+		c.inst.CatchUp(back)
+		c.tel.CatchUp.Store(int64(back))
+	}
 
 	// What was just installed is provably the authority's world at that tick — a
 	// whole correction re-checks its own integrity hash and a repair reproduces the

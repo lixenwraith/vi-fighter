@@ -109,8 +109,13 @@ func (tc *TimeControl) SetPaused(paused bool) bool {
 // IsPaused reports whether game time is frozen
 func (tc *TimeControl) IsPaused() bool { return tc.paused.Load() }
 
-// Wake fires when the rate changes and an armed sleep must be recomputed
+// Wake fires when an armed sleep must be recomputed: a rate or pause change, or a
+// Nudge from work the scheduler has to do before its next tick.
 func (tc *TimeControl) Wake() <-chan struct{} { return tc.wake }
+
+// Nudge wakes an armed sleep for a reason that is not a rate change, so the
+// scheduler reaches work it is owed rather than sleeping out the interval first.
+func (tc *TimeControl) Nudge() { tc.signal() }
 
 // SetScale applies a rate; an explicit change overrides any pending request
 func (tc *TimeControl) SetScale(s TimeScale) {

@@ -431,10 +431,12 @@ selects authority-only recovery.
 
 An install adopts the capture's tick, so a receiver's clock follows the age of
 whichever exchange delivered — one one-way delay for a whole body, three for a
-selective repair. A correction describing a tick this instance has not reached
-therefore waits for it, bounded by the link's measured round trip and never more
-than one at a time, so the offset settles on the slowest path instead of stepping
-between them.
+selective repair. The clock is pinned from both sides. A correction describing a
+tick this instance has not reached waits for it, never more than one at a time, so
+the offset settles on the slowest path instead of stepping between them. One
+describing a tick it has passed is installed and the ticks it gave back are re-run
+between two ticks, because a clock that moves backward moves every shared actor
+with it. The catch-up is bounded by the lead's own ceiling.
 
 ### D-24 — Cadence adapts; the convergence floor does not
 
