@@ -67,18 +67,26 @@ logs. Decide whether the expanded allocator remains the credential boundary or i
 renamed/split before adding the planned `github.com/lixenwraith/auth`
 Argon2-SCRAM dependency.
 
-### Add verified downloadable content bundles
+### Fetch a content-addressed bundle over HTTP
 
 - Priority: P1
-- Affected files: resource providers, browser/native admission, release assets
-- Prerequisite: decide the bundle format, compressed/expanded size limits,
-  publisher trust, allowed origins, and cache policy
+- Affected files: `internal/resource`, browser resource provider
+- Prerequisite: decide publisher trust, allowed origins, and cache policy; the
+  format and the limits are `resource.Scenario`'s and are already decided
 
-The scenario half is done: `resource.Scenario` is content-addressed, a coordinator
-serves its own digest during the join handshake, and the receiver verifies before
-constructing its `App`. What remains is the corpus, which travels as a fingerprint
-and not as bytes, and a download surface for a client that has neither — the
-nightly release page is the first candidate.
+Two of the three routes to content exist. A native player downloads the release
+wad and extracts it over a config root; a guest joining a session is served the
+coordinator's scenario and verifies its digest before constructing its `App`. The
+corpus needs neither: it is player domain, resolved per instance and never
+reconciled, so a peer holding a different one is not a disagreement to settle.
+
+The third route is a client with no config root and no peer — a WASM build before
+it has joined anything, which has no roots at all. An HTTP-backed provider reading
+the same content-addressed container is what [Multi-platform](multi-platform.md)
+anticipates, and it is one provider for both the browser case and a native player
+who would rather fetch a scenario than unpack one. What it needs before it is
+written is whose signature makes bytes trustworthy, which origins may serve them,
+and how long a fetched container is kept.
 
 ### Extract the renderer-neutral Android host model
 
@@ -150,15 +158,18 @@ files over `parameter.BuiltinSounds`, which the tag removes. The gates and
 `script/test.sh deploy` therefore build `./cmd/vif` alone, as the image does, so a
 break confined to soundlab is invisible. Tag the package out, or give it a stub.
 
-### Offer the fleet's scenarios on the session page
+### Let a request name the map size
 
-- Priority: P1
-- Affected files: the Hugo site's `vif-fleet.js` and the fleet page template
+- Priority: P2
+- Affected files: `tool/vif-allocator/config.go`, `tool/vif-allocator/allocator.go`,
+  the Hugo site's `vif-fleet.js`
 
-`GET /vif/api/sessions` now returns `limits.scenarios` from the node's volume, and
-`POST` accepts `{"scenario":"<name>"}`, but the page posts neither — so every
-session the website creates runs the default. Add the selector beside players and
-log level, the same shape as those two: omit the field to take the deployment's.
+`-map-size` is the deployment's for every session, and the session page cannot
+select it. A scenario that fixes its own dimensions ignores it — `td` emits
+`EventLevelSetup` at 500x250 — so the flag only decides the scenarios that do not,
+and those all run at one size. Offer it the way `scenarios` is offered, bounded by
+`parameter.MaxMapCells` rather than by a list: `limits` names the ceiling, a
+request names a size under it, and a scenario that sets its own still wins.
 
 ### Provision audio to the fleet when a host needs it
 
@@ -182,15 +193,6 @@ rejoining the same session downloads it again. Writing it under the user root
 behind an explicit opt-in would keep it, and needs a trust decision first: the
 bytes came from a peer, and nothing about a plaintext link says they are the
 operator's.
-
-### Serve a scenario over HTTP for browser builds
-
-- Priority: P3
-- Affected files: `internal/resource`, browser resource provider
-
-A WASM build has no config roots and no peer to receive from until it has joined.
-An HTTP-backed provider reading the same content-addressed container is what
-[Multi-platform](multi-platform.md) already anticipates.
 
 ## Audio
 
