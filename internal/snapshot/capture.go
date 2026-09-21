@@ -101,7 +101,7 @@ type CaptureHeader struct {
 	TickInterval  time.Duration `json:"tick_interval"`
 	Seed          uint64        `json:"seed"`
 	Session       uint64        `json:"session"`
-	ConfigID      string        `json:"config_id"`
+	ScenarioID    string        `json:"scenario_id"`
 	ContentID     string        `json:"content_id"`
 	ContentPin    string        `json:"content_pin"`
 	ContentFiles  uint64        `json:"content_files"`
@@ -159,7 +159,7 @@ func Anchor(h CaptureHeader) event.JournalAnchor {
 		Schema:        h.JournalSchema,
 		Seed:          h.Seed,
 		Session:       h.Session,
-		ConfigID:      h.ConfigID,
+		ScenarioID:    h.ScenarioID,
 		ContentID:     h.ContentID,
 		ContentPin:    h.ContentPin,
 		ContentFiles:  h.ContentFiles,

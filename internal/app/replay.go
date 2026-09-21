@@ -43,12 +43,12 @@ func ConfigFromAnchor(a event.JournalAnchor) (Config, error) {
 
 	// Embedded on both sides is the only pairing Config states exactly; a mixed
 	// anchor leaves the embedded side to discovery, which VerifyAnchor then rejects
-	if a.ConfigID == embeddedLabel && a.ContentID == embeddedLabel {
+	if a.ScenarioID == embeddedLabel && a.ContentID == embeddedLabel {
 		cfg.Resources.Embedded = true
 		return cfg, cfg.Validate()
 	}
-	if a.ConfigID != embeddedLabel {
-		cfg.Resources.Game = a.ConfigID
+	if a.ScenarioID != embeddedLabel {
+		cfg.Resources.Scenario = a.ScenarioID
 	}
 	if a.ContentID != embeddedLabel {
 		cfg.Resources.Content = a.ContentID
@@ -76,7 +76,7 @@ func (a *App) anchorIdentity(an event.JournalAnchor) []anchorField {
 		{"schema", an.Schema, uint64(event.JournalSchema)},
 		{"seed", an.Seed, a.world.Resources.Rand.Root()},
 		{"session", an.Session, a.world.Resources.Rand.Session()},
-		{"config_id", an.ConfigID, resolveConfigID(a.cfg)},
+		{"scenario_id", an.ScenarioID, resolveScenarioID(a.cfg)},
 		{"content_id", an.ContentID, reg.Strings.Get("content.source").Load()},
 		{"content_pin", an.ContentPin, svc.Pin()},
 		{"content_files", an.ContentFiles, uint64(reg.Ints.Get("content.files").Load())},

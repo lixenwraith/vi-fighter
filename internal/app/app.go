@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -407,7 +408,7 @@ func (a *App) initScheduler() error {
 	)
 	a.ctx.ResetChan = resetChan
 
-	if err := a.loadFSM(); err != nil {
+	if err := a.loadScenario(); err != nil {
 		return err
 	}
 
@@ -436,10 +437,10 @@ func (a *App) initScheduler() error {
 // embeddedLabel is the identity recorded for a built-in asset
 const embeddedLabel = "embedded"
 
-// resolveConfigID names the FSM entry a run loaded, or the embedded default.
+// resolveScenarioID names the scenario entry a run loaded, or the embedded default.
 // Shared by the anchor writer and VerifyAnchor so the two cannot disagree.
-func resolveConfigID(cfg Config) string {
-	path, err := resource.GameConfig(cfg.Resources)
+func resolveScenarioID(cfg Config) string {
+	path, err := resource.ScenarioPath(cfg.Resources)
 	if err != nil || path == "" {
 		return embeddedLabel
 	}
@@ -469,7 +470,7 @@ func (a *App) buildAnchor() event.JournalAnchor {
 	cfg := a.world.Resources.Config
 	return event.JournalAnchor{
 		Speed:         a.ctx.TimeCtl.Scale().String(),
-		ConfigID:      resolveConfigID(a.cfg),
+		ScenarioID:    resolveScenarioID(a.cfg),
 		ContentID:     reg.Strings.Get("content.source").Load(),
 		ContentPin:    service.MustGet[*service.ContentService](a.hub, "content").Pin(),
 		ContentFiles:  uint64(reg.Ints.Get("content.files").Load()),
@@ -546,20 +547,22 @@ func (a *App) loadKeymap() error {
 	return nil
 }
 
-// loadFSM resolves and loads the FSM config, falling back to the embedded default
-func (a *App) loadFSM() error {
-	path, err := resource.GameConfig(a.cfg.Resources)
+// loadScenario resolves and loads the scenario, falling back to the embedded default
+func (a *App) loadScenario() error {
+	path, err := resource.ScenarioPath(a.cfg.Resources)
 	if err != nil {
-		return fmt.Errorf("game config: %w", err)
+		return fmt.Errorf("scenario: %w", err)
 	}
 	if path == "" {
-		if err := a.scheduler.LoadFSMFromFS(asset.DefaultFSMConfig, asset.DefaultFSMEntry, manifest.RegisterFSMComponents); err != nil {
-			return fmt.Errorf("load embedded FSM: %w", err)
+		if err := a.scheduler.LoadScenarioFromFS(
+			asset.DefaultScenario, asset.DefaultScenarioEntry, manifest.RegisterFSMComponents); err != nil {
+			return fmt.Errorf("load embedded scenario: %w", err)
 		}
 		return nil
 	}
-	if err := a.scheduler.LoadFSMFromPath(path, manifest.RegisterFSMComponents); err != nil {
-		return fmt.Errorf("load FSM %s: %w", path, err)
+	fsys := os.DirFS(filepath.Dir(path))
+	if err := a.scheduler.LoadScenarioFromFS(fsys, filepath.Base(path), manifest.RegisterFSMComponents); err != nil {
+		return fmt.Errorf("load scenario %s: %w", path, err)
 	}
 	return nil
 }

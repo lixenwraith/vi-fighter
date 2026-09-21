@@ -16,14 +16,14 @@ import (
 	"github.com/lixenwraith/vi-fighter/internal/service"
 )
 
-// Check validates every resolved external config without starting the game.
+// Check validates every resolved external resource without starting the game.
 func Check(o Options, w io.Writer) error {
 	if err := o.Validate(); err != nil {
 		return err
 	}
 	event.EnsureRegistry()
 
-	if err := checkFSM(o, w); err != nil {
+	if err := checkScenario(o, w); err != nil {
 		return err
 	}
 	if err := checkKeymap(o, w); err != nil {
@@ -56,26 +56,26 @@ func checkKeymap(o Options, w io.Writer) error {
 	return nil
 }
 
-// checkFSM loads the resolved FSM config and reports its source
-func checkFSM(o Options, w io.Writer) error {
+// checkScenario loads the resolved scenario and reports its source
+func checkScenario(o Options, w io.Writer) error {
 	m := fsm.NewMachine[*engine.World]()
 	manifest.RegisterFSMComponents(m)
 
-	path, err := GameConfig(o)
+	path, err := ScenarioPath(o)
 	if err != nil {
 		return err
 	}
 	if path == "" {
-		if err := fsm.LoadConfigFromFS(m, asset.DefaultFSMConfig, asset.DefaultFSMEntry); err != nil {
+		if err := fsm.LoadScenarioFromFS(m, asset.DefaultScenario, asset.DefaultScenarioEntry); err != nil {
 			return err
 		}
-		fmt.Fprintln(w, "config ok: embedded default")
+		fmt.Fprintln(w, "scenario ok: embedded default")
 		return checkSystems(m, w)
 	}
-	if err := fsm.LoadConfigFromPath(m, path); err != nil {
+	if err := fsm.LoadScenarioFromPath(m, path); err != nil {
 		return err
 	}
-	fmt.Fprintln(w, "config ok:", path)
+	fmt.Fprintln(w, "scenario ok:", path)
 	return checkSystems(m, w)
 }
 

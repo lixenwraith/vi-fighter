@@ -125,7 +125,7 @@ func (a *App) CaptureShared() (snapshot.SharedCapture, error) {
 			TickInterval:  parameter.GameUpdateInterval,
 			Seed:          a.world.Resources.Rand.Root(),
 			Session:       a.world.Resources.Rand.Session(),
-			ConfigID:      resolveConfigID(a.cfg),
+			ScenarioID:    resolveScenarioID(a.cfg),
 			ContentID:     reg.Strings.Get("content.source").Load(),
 			ContentFiles:  uint64(reg.Ints.Get("content.files").Load()),
 			ContentBlocks: uint64(reg.Ints.Get("content.blocks").Load()),

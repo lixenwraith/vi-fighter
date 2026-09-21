@@ -44,7 +44,7 @@ type recordFields struct {
 
 type anchorFields struct {
 	Speed         string `json:"speed"`
-	ConfigID      string `json:"config_id"`
+	ScenarioID    string `json:"scenario_id"`
 	ContentID     string `json:"content_id"`
 	ContentPin    string `json:"content_pin"`
 	Schema        uint64 `json:"schema"`
@@ -166,7 +166,7 @@ func decodeAnchor(raw json.RawMessage) (event.JournalAnchor, error) {
 		return event.JournalAnchor{}, err
 	}
 	return event.JournalAnchor{
-		Speed: f.Speed, ConfigID: f.ConfigID,
+		Speed: f.Speed, ScenarioID: f.ScenarioID,
 		ContentID: f.ContentID, ContentPin: f.ContentPin,
 		Schema: f.Schema, Seed: f.Seed, Session: f.Session, JSeq: f.JSeq,
 		Run: f.Run, Tick: f.Tick, StartRun: f.StartRun, StartTick: f.StartTick,

@@ -428,7 +428,7 @@ func TestVerifyAnchorRejectsMismatch(t *testing.T) {
 		Schema:        event.JournalSchema,
 		Seed:          fixtureSeed,
 		Session:       a.World().Resources.Rand.Session(),
-		ConfigID:      resolveConfigID(a.cfg),
+		ScenarioID:    resolveScenarioID(a.cfg),
 		ContentID:     a.World().Resources.Status.Strings.Get("content.source").Load(),
 		ContentFiles:  uint64(a.World().Resources.Status.Ints.Get("content.files").Load()),
 		ContentBlocks: uint64(a.World().Resources.Status.Ints.Get("content.blocks").Load()),

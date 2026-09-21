@@ -67,7 +67,7 @@ func (r JournalRecord) Replicated() bool { return Replicated(r.Type, r.Domain) }
 // rotated log file can be replayed without its predecessors.
 type JournalAnchor struct {
 	Speed      string // time scale ladder token; exact, unlike a float
-	ConfigID   string
+	ScenarioID string
 	ContentID  string
 	ContentPin string // file the corpus is restricted to, empty when unpinned
 

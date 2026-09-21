@@ -55,7 +55,7 @@ type PeerIdentity struct {
 	TickIntervalNS int64  `json:"tick_ns"`
 	Seed           uint64 `json:"seed"`
 	Session        uint64 `json:"session"`
-	ConfigID       string `json:"config_id"`
+	ScenarioID     string `json:"scenario_id"`
 	ContentID      string `json:"content_id"`
 	ContentPin     string `json:"content_pin,omitempty"`
 	ContentFiles   uint64 `json:"content_files"`
@@ -70,7 +70,7 @@ type PeerIdentity struct {
 func (local PeerIdentity) SessionFrom(an event.JournalAnchor) PeerIdentity {
 	local.Seed = an.Seed
 	local.Session = an.Session
-	local.ConfigID = an.ConfigID
+	local.ScenarioID = an.ScenarioID
 	local.ContentID = an.ContentID
 	local.ContentPin = an.ContentPin
 	local.ContentFiles = an.ContentFiles
@@ -107,7 +107,7 @@ func (local PeerIdentity) sessionFields(remote PeerIdentity) []identityField {
 	return []identityField{
 		{"seed", local.Seed, remote.Seed},
 		{"session", local.Session, remote.Session},
-		{"config_id", local.ConfigID, remote.ConfigID},
+		{"scenario_id", local.ScenarioID, remote.ScenarioID},
 		{"content_id", local.ContentID, remote.ContentID},
 		{"content_pin", local.ContentPin, remote.ContentPin},
 		{"content_files", local.ContentFiles, remote.ContentFiles},

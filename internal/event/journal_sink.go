@@ -41,7 +41,7 @@ func (vlogSink) Anchor(a JournalAnchor) {
 		"start_tick", a.StartTick,
 		"seed", a.Seed,
 		"session", a.Session,
-		"config_id", a.ConfigID,
+		"scenario_id", a.ScenarioID,
 		"content_id", a.ContentID,
 		"content_pin", a.ContentPin,
 		"content_files", a.ContentFiles,
