@@ -270,7 +270,7 @@ A scripted participant can only enter a session at tick zero. Its actions are
 anchored to absolute ticks, so one admitted through the mid-run gate finds its
 first action already past and stops with `script passed action`. Size the lobby
 with `-players` when a scripted guest has to be in the session — which is what
-`test/scenario.sh host-loss` does.
+`script/test.sh host-loss` does.
 
 Together these make a scripted participant: one side of a session plays a fixed
 sequence at real time while a person plays the other freely, which is how a
@@ -676,6 +676,13 @@ Speed changes, tick stepping and run-until controls are refused in a live networ
 session for the same per-instance-clock reason as pause.
 
 ## 10. Reset and operator state
+
+`:n <scenario>` is not a reset. The regions a scenario declares are what register
+the FSM metric set, and `Scheduler.Prepare` freezes that set for the life of a
+run, so another scenario needs another run: `Run` owns a loop that builds one App
+per scenario, and the command validates the name and latches which one comes next.
+Everything operator-owned restarts with it. See
+[HFSM and configuration](fsm-and-configuration.md) §2.
 
 A `:new` command emits `EventGameResetRequest` and requests scheduler reset
 without reconstructing the process. In a live session only the coordinator may

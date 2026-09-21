@@ -1,10 +1,10 @@
-# Manual test scenarios
+# End-to-end setups
 
 Command reference for verifying behaviour on a dev machine. Build first: `make dev`.
 
 ```sh
-./test/scenario.sh list        # every scenario
-./test/scenario.sh all         # every automated one; prints PASS/FAIL
+./script/test.sh list        # every scenario
+./script/test.sh all         # every automated one; prints PASS/FAIL
 ```
 
 Overrides: `BIN` (default `./bin/vif`), `HOST`, `PORT`, `PROBE_PORT`, `PLAYERS`,
@@ -27,8 +27,8 @@ Each runs in the foreground until you stop it.
 Two terminals for a real session:
 
 ```sh
-./test/scenario.sh host        # terminal 1
-./test/scenario.sh join        # terminal 2
+./script/test.sh host        # terminal 1
+./script/test.sh join        # terminal 2
 ```
 
 `host` with no argument admits the whole roster and starts on its first guest, so
@@ -56,11 +56,12 @@ them believes it is hosting one. See
 
 ## Automated
 
-`./test/scenario.sh all` runs every one of these and prints PASS/FAIL.
+`./script/test.sh all` runs every one of these and prints PASS/FAIL.
 
 | Scenario | Asserts |
 |---|---|
 | `check` | embedded, default `wad/scenario/main`, and named `wad/scenario/td` all resolve |
+| `scenario` | `:n td` then `:n main` each rebuild the run: three scenario records, the last matching the first. Needs a `script(1)` that can give it a pty, and skips rather than fails without one |
 | `lifetime` | an unclaimed session exits 0 on its first-guest window; an emptied one exits 0 on its vacancy grace, each naming why |
 | `drain` | `SIGTERM` keeps the match running, reports `live=true ready=false phase=draining`, keeps the clock moving, then ends itself |
 | `identity` | a peer running a different build or session is refused (runs the Go tests that can construct one) |
