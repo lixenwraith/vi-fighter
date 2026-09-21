@@ -49,6 +49,9 @@ Existing focused references remain useful:
 - [FSM authoring reference](fsm-reference.md) documents the TOML surface in
   detail.
 - [TODO](todo.md) is the running work list the packaging checklists feed.
+- [Map enhancement plan](ongoing-map-enhancement.md) is transient: the phased plan
+  for live map change, over-the-air bundles and an externally supplied fleet `wad/`.
+  It is deleted when the last phase lands.
 - [Keymap example](../internal/input/README.md) shows sparse key overrides.
 - [Genetic package reference](../pkg/genetic/README.md) documents the reusable
   optimization library.
@@ -68,13 +71,13 @@ changing a subsystem, update the source that actually owns its shape.
 | Build capabilities | build constraints in `internal/app/presentation_*`, `audio*`, and `network_*` | Makefile profiles and generated capability-specific builders |
 | System domain profiles and dependencies | `SystemDef.Domain`/`Requires` in `internal/manifest/definition.go` | `manifest.ProfileFor`/`SystemProfiles`, `World.SystemInitOrder`, `app.checkSystems` |
 | Event names, payload association, replication class | `internal/event/type.go` comments and constants | `internal/event/registry_gen.go` |
-| Runtime shape and deterministic harness | `internal/app/config.go`, `headless.go`, `script.go` | `App`, `ClockScheduler`, services |
+| Runtime shape and deterministic harness | `internal/app/config.go`, `headless.go`, `script.go` | `App`, `Scheduler`, services |
 | Replay journal format, recording/replay drivers, and authored scripts | `internal/event/journal.go`, `origin.go`, `internal/journal` | `internal/app/replay.go`, `play.go`, `script.go` |
 | Correction cadence, selective repair, authority term and succession | `internal/converge` | `App.corrections`/`authority`/`reach` through `converge.Instance`; its criteria run against a stub world |
 | Cursor lifecycle, roster, and local selection | `internal/system/cursor.go`, `internal/engine/resource.go` | FSM cursor events, mode routing, per-slot metrics |
 | Shared-world capture layout and its declared carriers | `internal/snapshot/capture.go`, `internal/app/capture.go`, `SystemDef.Snapshot` in `internal/manifest/definition.go` | `internal/engine/snapshot_world_gen.go`, `internal/app/snapshot_stage.go`, `internal/network/snapshot.go` |
 | Input enum string forms | input enum definitions | `internal/input/strings_gen.go` |
-| Shipped encounter progression | `wad/game/main/*.toml` | `internal/fsm`, `internal/engine.ClockScheduler` |
+| Shipped encounter progression | `wad/game/main/*.toml` | `internal/fsm`, `internal/engine.Scheduler` |
 | Embedded fallback progression | `internal/asset/config/*.toml` | the same, when no root supplies one |
 | Alternate scenarios | `wad/game/blank`, `wad/game/td` | selected by name or path with `-g` |
 | Gameplay tuning | `internal/parameter` and `internal/parameter/visual` | systems and renderers |
