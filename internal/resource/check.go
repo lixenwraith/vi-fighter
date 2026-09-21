@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lixenwraith/vi-fighter/internal/asset"
 	"github.com/lixenwraith/vi-fighter/internal/engine"
 	"github.com/lixenwraith/vi-fighter/internal/event"
 	"github.com/lixenwraith/vi-fighter/internal/fsm"
@@ -56,26 +55,27 @@ func checkKeymap(o Options, w io.Writer) error {
 	return nil
 }
 
-// checkScenario loads the resolved scenario and reports its source
+// checkScenario loads the resolved scenario and reports what a peer would compare:
+// the name, the digest, and where it came from.
 func checkScenario(o Options, w io.Writer) error {
-	m := fsm.NewMachine[*engine.World]()
-	manifest.RegisterFSMComponents(m)
-
-	path, err := ScenarioPath(o)
+	sc, err := LoadScenario(o)
 	if err != nil {
 		return err
 	}
-	if path == "" {
-		if err := fsm.LoadScenarioFromFS(m, asset.DefaultScenario, asset.DefaultScenarioEntry); err != nil {
-			return err
-		}
-		fmt.Fprintln(w, "scenario ok: embedded default")
-		return checkSystems(m, w)
-	}
-	if err := fsm.LoadScenarioFromPath(m, path); err != nil {
+	m := fsm.NewMachine[*engine.World]()
+	manifest.RegisterFSMComponents(m)
+	if err := fsm.LoadScenarioFromFS(m, sc.FS(), sc.Entry()); err != nil {
 		return err
 	}
-	fmt.Fprintln(w, "scenario ok:", path)
+	source, err := ScenarioPath(o)
+	if err != nil {
+		return err
+	}
+	if source == "" {
+		source = "embedded default"
+	}
+	fmt.Fprintf(w, "scenario ok: %s (%s, %d files, sha256:%s)\n",
+		source, sc.Name, sc.Files(), sc.Short())
 	return checkSystems(m, w)
 }
 

@@ -45,6 +45,12 @@ All external resources share this root hierarchy; see
 [External filesystem layout](filesystem-layout.md) for the categorized tree and
 migration policy.
 
+The resolved entry and its region files are read whole into a `resource.Scenario`
+before the FSM loads, and the loader reads that rather than the host filesystem.
+The scenario is identified by its name and by the SHA-256 of its canonical form,
+which is what a replay and a join are refused on; `-check` prints both. Reading it
+first is also what lets a scenario that never touched this disk be loaded.
+
 `-d` selects the embedded scenario and content. It is mutually exclusive with
 `-s` and `-f`; combining them fails validation.
 

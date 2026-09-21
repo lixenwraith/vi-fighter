@@ -4,14 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/lixenwraith/terminal"
-	"github.com/lixenwraith/vi-fighter/internal/asset"
 	"github.com/lixenwraith/vi-fighter/internal/converge"
 	"github.com/lixenwraith/vi-fighter/internal/engine"
 	"github.com/lixenwraith/vi-fighter/internal/event"
@@ -44,6 +42,7 @@ type App struct {
 
 	world        *engine.World
 	ctx          *engine.GameContext
+	scenario     resource.Scenario
 	inputMachine *input.Machine
 	router       *mode.Router
 	recorder     *journal.Recorder
@@ -191,6 +190,12 @@ func (a *App) init() error {
 		}
 	}
 
+	// Before the services, so a scenario that does not resolve fails in front of
+	// the operator rather than after the terminal has been taken, and before the
+	// journal anchor, which names what this run turned out to be reading.
+	if err := a.readScenario(); err != nil {
+		return err
+	}
 	if err := a.initServices(); err != nil {
 		return err
 	}
@@ -408,8 +413,9 @@ func (a *App) initScheduler() error {
 	)
 	a.ctx.ResetChan = resetChan
 
-	if err := a.loadScenario(); err != nil {
-		return err
+	if err := a.scheduler.LoadScenarioFromFS(
+		a.scenario.FS(), a.scenario.Entry(), manifest.RegisterFSMComponents); err != nil {
+		return fmt.Errorf("load scenario %s: %w", a.scenario.Name, err)
 	}
 
 	// MetaSystem needs the completed GameContext and therefore joins here. Its
@@ -434,19 +440,6 @@ func (a *App) initScheduler() error {
 	return nil
 }
 
-// embeddedLabel is the identity recorded for a built-in asset
-const embeddedLabel = "embedded"
-
-// resolveScenarioID names the scenario entry a run loaded, or the embedded default.
-// Shared by the anchor writer and VerifyAnchor so the two cannot disagree.
-func resolveScenarioID(cfg Config) string {
-	path, err := resource.ScenarioPath(cfg.Resources)
-	if err != nil || path == "" {
-		return embeddedLabel
-	}
-	return path
-}
-
 // initJournal opens the replay journal and installs it on the event queue.
 // Opt-in: it records every non-system event for the life of the run.
 func (a *App) initJournal() error {
@@ -469,22 +462,23 @@ func (a *App) buildAnchor() event.JournalAnchor {
 	reg := a.world.Resources.Status
 	cfg := a.world.Resources.Config
 	return event.JournalAnchor{
-		Speed:         a.ctx.TimeCtl.Scale().String(),
-		ScenarioID:    resolveScenarioID(a.cfg),
-		ContentID:     reg.Strings.Get("content.source").Load(),
-		ContentPin:    service.MustGet[*service.ContentService](a.hub, "content").Pin(),
-		ContentFiles:  uint64(reg.Ints.Get("content.files").Load()),
-		ContentBlocks: uint64(reg.Ints.Get("content.blocks").Load()),
-		ContentLines:  uint64(reg.Ints.Get("content.lines").Load()),
-		Seed:          a.world.Resources.Rand.Root(),
-		Session:       a.world.Resources.Rand.Session(),
-		TickInterval:  int64(parameter.GameUpdateInterval),
-		Width:         a.ctx.Width,
-		Height:        a.ctx.Height,
-		MapWidth:      cfg.MapWidth,
-		MapHeight:     cfg.MapHeight,
-		CropOnResize:  cfg.CropOnResize,
-		SessionShared: a.world.SessionShared(),
+		Speed:          a.ctx.TimeCtl.Scale().String(),
+		ScenarioID:     a.scenario.Name,
+		ScenarioDigest: a.scenario.Digest(),
+		ContentID:      reg.Strings.Get("content.source").Load(),
+		ContentPin:     service.MustGet[*service.ContentService](a.hub, "content").Pin(),
+		ContentFiles:   uint64(reg.Ints.Get("content.files").Load()),
+		ContentBlocks:  uint64(reg.Ints.Get("content.blocks").Load()),
+		ContentLines:   uint64(reg.Ints.Get("content.lines").Load()),
+		Seed:           a.world.Resources.Rand.Root(),
+		Session:        a.world.Resources.Rand.Session(),
+		TickInterval:   int64(parameter.GameUpdateInterval),
+		Width:          a.ctx.Width,
+		Height:         a.ctx.Height,
+		MapWidth:       cfg.MapWidth,
+		MapHeight:      cfg.MapHeight,
+		CropOnResize:   cfg.CropOnResize,
+		SessionShared:  a.world.SessionShared(),
 	}
 }
 
@@ -547,22 +541,15 @@ func (a *App) loadKeymap() error {
 	return nil
 }
 
-// loadScenario resolves and loads the scenario, falling back to the embedded default
-func (a *App) loadScenario() error {
-	path, err := resource.ScenarioPath(a.cfg.Resources)
+// readScenario reads this run's scenario whole. Reading it rather than pointing the
+// loader at a directory is what gives the run a digest to be identified by, and the
+// one seam a scenario that arrived from a peer enters through.
+func (a *App) readScenario() error {
+	sc, err := resource.LoadScenario(a.cfg.Resources)
 	if err != nil {
 		return fmt.Errorf("scenario: %w", err)
 	}
-	if path == "" {
-		if err := a.scheduler.LoadScenarioFromFS(
-			asset.DefaultScenario, asset.DefaultScenarioEntry, manifest.RegisterFSMComponents); err != nil {
-			return fmt.Errorf("load embedded scenario: %w", err)
-		}
-		return nil
-	}
-	fsys := os.DirFS(filepath.Dir(path))
-	if err := a.scheduler.LoadScenarioFromFS(fsys, filepath.Base(path), manifest.RegisterFSMComponents); err != nil {
-		return fmt.Errorf("load scenario %s: %w", path, err)
-	}
+	a.scenario = sc
+	vlog.Info("app", "msg", "scenario", "name", sc.Name, "digest", sc.Short(), "files", sc.Files())
 	return nil
 }

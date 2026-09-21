@@ -105,7 +105,7 @@ func main() {
 	case *flagCheck:
 		err = resource.Check(buildConfig().Resources, os.Stdout)
 	case *flagReplay != "":
-		err = app.PlayJournal(*flagReplay)
+		err = app.PlayJournal(flagConfig.options(), *flagReplay)
 	case *flagScript != "":
 		cfg := buildConfig()
 		if *flagWatch {

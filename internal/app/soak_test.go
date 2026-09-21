@@ -45,12 +45,14 @@ type soakRun struct {
 	want []string
 	end  event.Stamp
 	seed uint64
+	root string // the config root the replay resolves the anchor's scenario under
 }
 
 // soakScenarioDir is the external scenario the tower soak drives; the tower region is
 // the only path that engages gateway, eye and route-graph navigation
-const soakScenarioDir = "../../wad/scenario/main"
-const soakContentDir = "../../wad/content"
+const soakRoot = "../../wad"
+const soakScenarioDir = soakRoot + "/scenario/main"
+const soakContentDir = soakRoot + "/content"
 
 // towerRegions mirrors wad/scenario/main's declared regions and their entry states
 var towerRegions = []journal.FuzzRegion{
@@ -67,7 +69,8 @@ func towerScenario(t *testing.T, seed uint64) Config {
 	if _, err := os.Stat(filepath.Join(soakScenarioDir, paths.ScenarioFile)); err != nil {
 		t.Skipf("external scenario %s not present", soakScenarioDir)
 	}
-	cfg := Config{Mode: ModeHeadless, Seed: seed, Resources: resource.Options{Scenario: soakScenarioDir}, Width: 160, Height: 50}
+	cfg := Config{Mode: ModeHeadless, Seed: seed, Width: 160, Height: 50,
+		Resources: resource.Options{Dir: soakRoot, Scenario: paths.MainScenarioName}}
 	if _, err := os.Stat(soakContentDir); err == nil {
 		cfg.Resources.Content = soakContentDir
 	}
@@ -196,6 +199,7 @@ func runSoakScriptCfg(t *testing.T, cfg Config, opt journal.FuzzOptions, prelude
 		want: a.SnapshotSimulation(),
 		end:  a.Position(),
 		seed: opt.Seed,
+		root: cfg.Resources.Dir,
 	}
 	a.Close()
 
@@ -217,7 +221,7 @@ func runSoakScript(t *testing.T, seed uint64, steps int) soakRun {
 
 // replaySoak reproduces a source run from its capture
 func replaySoak(run soakRun, recs []event.JournalRecord) error {
-	return replayInto(run.cap.Anchors(), recs, run.want, run.end)
+	return replayInto(run.root, run.cap.Anchors(), recs, run.want, run.end)
 }
 
 // TestReplaySoak drives seeded scripts through journal, replay and comparison.

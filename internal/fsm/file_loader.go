@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 
 	"github.com/lixenwraith/toml"
 )
@@ -26,7 +27,7 @@ func LoadScenarioFromPath[T any](m *Machine[T], entryPath string) error {
 func LoadScenarioFromFS[T any](m *Machine[T], fsys fs.FS, entry string) error {
 	// 'stack' tracks the in-progress include chain, not every file seen
 	stack := make(map[string]bool)
-	merged, err := loadAndResolve(fsys, entry, stack)
+	merged, err := loadAndResolve(fsys, entry, stack, nil)
 	if err != nil {
 		return fmt.Errorf("failed to load scenario '%s': %w", entry, err)
 	}
@@ -39,22 +40,39 @@ func LoadScenarioFromFS[T any](m *Machine[T], fsys fs.FS, entry string) error {
 // see the declarations, and decoding ScenarioDoc from this map is the only way to
 // reach a transition's trigger without running the game.
 func ResolveScenario(fsys fs.FS, entry string) (map[string]any, error) {
-	merged, err := loadAndResolve(fsys, entry, make(map[string]bool))
+	merged, err := loadAndResolve(fsys, entry, make(map[string]bool), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load scenario '%s': %w", entry, err)
 	}
 	return merged, nil
 }
 
+// ScenarioFiles names every file a scenario is made of — its entry and the region
+// files that entry includes — sorted and deduplicated. A portable copy is read
+// through this, so it carries exactly the files the loader would have read and
+// nothing that happens to sit beside them.
+func ScenarioFiles(fsys fs.FS, entry string) ([]string, error) {
+	var visited []string
+	if _, err := loadAndResolve(fsys, entry, make(map[string]bool), &visited); err != nil {
+		return nil, fmt.Errorf("failed to load scenario '%s': %w", entry, err)
+	}
+	slices.Sort(visited)
+	return slices.Compact(visited), nil
+}
+
 // loadAndResolve recursively loads a TOML file and resolves region file includes
 // stack holds the ancestors currently being resolved; entries are popped on return
-func loadAndResolve(fsys fs.FS, name string, stack map[string]bool) (map[string]any, error) {
+// visited, when non-nil, collects every file read, in no particular order
+func loadAndResolve(fsys fs.FS, name string, stack map[string]bool, visited *[]string) (map[string]any, error) {
 	cleanName := path.Clean(name)
 	if stack[cleanName] {
 		return nil, fmt.Errorf("circular include detected: %s", cleanName)
 	}
 	stack[cleanName] = true
 	defer delete(stack, cleanName) // pop on return; siblings may re-include
+	if visited != nil {
+		*visited = append(*visited, cleanName)
+	}
 
 	data, err := fs.ReadFile(fsys, cleanName)
 	if err != nil {
@@ -96,8 +114,7 @@ func loadAndResolve(fsys fs.FS, name string, stack map[string]bool) (map[string]
 			return nil, fmt.Errorf("%s: region '%s' file must be a string", cleanName, regionName)
 		}
 
-		// pass stack (was visited)
-		regionMap, err := loadAndResolve(fsys, path.Join(baseDir, fileStr), stack)
+		regionMap, err := loadAndResolve(fsys, path.Join(baseDir, fileStr), stack, visited)
 		if err != nil {
 			return nil, fmt.Errorf("region '%s': %w", regionName, err)
 		}
