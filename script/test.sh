@@ -132,6 +132,7 @@ Automated (assert, and used by `all`)
   scenario          :n <name> rebuilds the run on another scenario and back
   transfer          a guest with no root receives the session's scenario
   follow            a host changes scenario and its guest rebuilds with it
+  fleet             the session template and the allocator render one workload
   lifetime          unclaimed expiry, then vacancy expiry
   drain             SIGTERM drains instead of cutting a match
   identity          a peer running a different build is refused (runs the tests)
@@ -439,8 +440,39 @@ follow)
 		|| fail "the guest ended on $ends, the host on $want"
 	[ "$(grep -c '"msg":"join installed the session world"' "$GL"/*.jsonl 2>/dev/null)" -ge 2 ] \
 		|| fail "the guest did not install the session world a second time: $GL"
+	# The host's own player after the change, not before it. One process writes one
+	# log across both runs, and the guest's arrival spawns a cursor too, so the
+	# count only means something from the restart onward. A scenario that spawns no
+	# cursor leaves the host watching its guests play, which is what blank used to do.
+	# Slot 0 is the host's own; the guest's arrival spawns one too, so the count
+	# alone says nothing.
+	own=$(cat "$HL"/*.jsonl 2>/dev/null | awk '
+		/"msg":"run restarting"/ { seen = 1; n = 0; next }
+		seen && /"msg":"cursor spawn"/ && /"slot":0/ { n++ }
+		END { print n + 0 }')
+	[ "$own" -ge 1 ] || fail "the rebuilt host spawned no cursor of its own: $HL"
 	rm -rf "$HL" "$GL" "$ROOT" "$HK" "$GK"
 	pass "the host changed scenario and its guest rebuilt and rejoined on it"
+	;;
+
+fleet)
+	# The template a person renders by hand and the one the allocator renders have
+	# to be the same workload, or "the allocator is broken" and "the workload is
+	# broken" stop being separable questions. Compares the arguments, the mounts and
+	# the claims rather than the whole document, which carries a session id.
+	command -v go >/dev/null 2>&1 || fail "go not found"
+	rendered=$(SCENARIO=td LOG_LEVEL=debug PLAYERS=4 \
+		./deploy/k3s/render-session.sh fleetcheck 31700 vi-fighter:dev 4 120x40)
+	for want in \
+		'"-config-dir"' '"-s"' '"td"' '"debug"' \
+		'claimName: vif-fleet-wad' 'subPath: scenario' 'subPath: image' \
+		'name: vif-session-env'
+	do
+		printf '%s' "$rendered" | grep -q -- "$want" \
+			|| fail "the rendered template is missing $want"
+	done
+	go test ./tool/vif-allocator/ >/dev/null || fail "allocator tests"
+	pass "the session template and the allocator agree on the fleet's workload"
 	;;
 
 image)
@@ -452,7 +484,7 @@ image)
 	;;
 
 all)
-	for s in check scenario transfer follow lifetime drain identity; do
+	for s in check scenario transfer follow fleet lifetime drain identity; do
 		note "$s"
 		"$0" "$s"
 	done
