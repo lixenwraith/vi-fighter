@@ -552,7 +552,7 @@ func (w *World) predictRecordedCursorMove(eventType event.EventType, payload any
 		return
 	}
 	if p, ok := payload.(*event.CursorMoveRequestPayload); ok {
-		w.predictCursorMove(p.Entity, p.X, p.Y)
+		w.predictCursorMove(p.Entity, p.X, p.Y, w.Resources.Config.pointer) // a record does not say which input
 	}
 }
 
@@ -680,6 +680,11 @@ func (w *World) PushEntityFromBlocked(entity core.Entity, mask component.WallBlo
 	}
 
 	w.Positions.SetPosition(entity, component.PositionComponent{X: newX, Y: newY})
+	// Physics integrates from the sub-cell position; left in the wall, the next
+	// step would write the entity straight back into the cell it was pushed from.
+	if k, ok := w.Components.Kinetic.GetPtr(entity); ok {
+		k.PreciseX, k.PreciseY = vmath.Point{X: newX, Y: newY}.CenterF()
+	}
 	return newX, newY, true
 }
 
@@ -749,7 +754,15 @@ func (w *World) CursorCell(e core.Entity) (component.PositionComponent, bool) {
 // applies it.
 // Caller MUST hold updateMutex
 func (w *World) PushCursorMove(e core.Entity, x, y int) {
-	w.predictCursorMove(e, x, y)
+	w.predictCursorMove(e, x, y, false)
+	w.PushCrossing(event.EventCursorMoveRequest, &event.CursorMoveRequestPayload{Entity: e, X: x, Y: y})
+}
+
+// PushPointerMove is PushCursorMove for a cell the pointer named, which the camera
+// follows with its pointer margins (see CameraPointerMarginX).
+// Caller MUST hold updateMutex
+func (w *World) PushPointerMove(e core.Entity, x, y int) {
+	w.predictCursorMove(e, x, y, true)
 	w.PushCrossing(event.EventCursorMoveRequest, &event.CursorMoveRequestPayload{Entity: e, X: x, Y: y})
 }
 
@@ -757,10 +770,11 @@ func (w *World) PushCursorMove(e core.Entity, x, y int) {
 // request. It clamps exactly as that handler does: a prediction of the requested
 // cell rather than the applied one would never match its own announcement, and
 // every request would snap.
-func (w *World) predictCursorMove(e core.Entity, x, y int) {
+func (w *World) predictCursorMove(e core.Entity, x, y int, pointer bool) {
 	if !w.Resources.Player.IsLocal(e) || !w.SimulatesLocally(e) {
 		return
 	}
+	w.Resources.Config.pointer = pointer
 	if _, ok := w.Positions.GetPosition(e); !ok {
 		return // move announces nothing for a cursor with no cell, so nothing reconciles
 	}
