@@ -234,90 +234,29 @@ retain that distinction.
 Diagnoses and what each item follows from are in
 [Troubleshooting](troubleshooting.md).
 
-### Find what diverges a guest in the tower region
-
-- Priority: P1
-- Affected files: `internal/system/network.go`, `internal/engine/snapshot_roster.go`,
-  `internal/system/interaction.go`, `internal/snapshot/manifest.go`
-- Prerequisite: a delayed-link harness that counts, per section, what a guest in the
-  tower region answers wrong
-
-A guest present when the region starts answers 77% of manifests hash-only, against
-95% on the main map; the differing sections are eye, genotype, combat and fsm. The
-lead suspect is owner-authored cursor state: `writeCursorState` skips the owner, so
-shield, energy and heat change at once there and a lead later elsewhere, while eye
-and snake contact reads them from shared systems — the shape crossings had before
-they applied at one tick. If confirmed, shared readers take the committed copy on
-every instance and the live value stays with presentation. The browser cost is the
-other half: every answer captures and hashes the whole world, maze walls included;
-per-store write counters would let an unwritten section keep its hash.
-
-### Decide who owns a contested shared hit
+### Hash only what changed when a guest answers a manifest
 
 - Priority: P2
-- Affected files: `internal/system/combat.go`, `internal/component/combat.go`,
-  `internal/engine/prediction.go`
-- Prerequisite: none; it is a rule to choose
-
-`LastDamagedBy` and the knockback override `SpendKineticImmunity` reports as
-`opened` both follow arrival order, and a hit that missed the lead is applied late
-by the authority, so for that lateness two instances disagree on the kill's credit
-and on which hit overrides. The correction repairs the world, but the ledger pays
-the credit its own prediction recorded, and the authority's world no longer holds
-the dead entity to read it from. One rule for both, made where the hit is produced
-and independent of arrival order, closes both; the per-attacker window was that
-answer for the damage budget.
-
-### Predict a typed gold member instead of publishing it
-
-- Priority: P2
-- Affected files: `internal/system/network.go`, `internal/system/typing.go`,
-  `internal/render/renderer`
+- Affected files: `internal/snapshot/manifest.go`, `internal/engine/store.go`
 - Prerequisite: none
 
-`EventCompositeMemberDestroyed` is the one crossing its producer applies at once
-(`producerImmediate`), because `isLeftmostMember` validates the next keystroke
-against the live run; a correction inside the lead shows the member again for a
-tick. A player-domain tombstone the check skips and the glyph renderer hides would
-let the member cross at the agreed tick like everything else.
-
-### Retire a splash whose shared anchor an install re-issues
-
-- Priority: P3
-- Affected files: `internal/app/capture.go`, `internal/system/splash.go`
-- Prerequisite: none
-
-An install restores the authority's shared allocator, so the ids from its
-`NextEntity` up to this instance's are issued again. The prediction ledger drops
-entries in that range; a timer splash anchored in it keeps counting on whatever
-composite takes the id until it expires. The install knows the range and can hand
-it to the one other holder of a bare shared id.
-
-### Keep the correction magnitude to the shared surface
-
-- Priority: P3
-- Affected files: `internal/gen-manifest/main.go`, `internal/app/capture.go`
-- Prerequisite: none
-
-`SharedWorldDifference` counts the owner-authored cells of a cursor this instance
-authors, which `RebindCursorRoster` then restores, so a projected install reports a
-phantom entity per owned cursor. The generated difference can skip the nine stores
-`snapshot_roster.go` restores for the entities `CaptureCursorControl` held.
+Answering a manifest captures and hashes the whole shared world, maze walls
+included, which in the browser build in the tower region is most of what a guest
+spends now that the answer is almost always hash-only. A write counter per store
+would let a section keep its last hash while nothing wrote to it.
 
 ### Find what makes a networkless soak load-sensitive
 
-- Priority: P2
-- Affected files: `internal/app/soak_test.go`, `internal/event/pool.go`,
-  `internal/event/batch_pool.go`
-- Prerequisite: a reproduction; 36 runs under parallel load, and 12 more beside six
-  spinning cores, stayed clean
+- Priority: P3
+- Affected files: `internal/app/soak_test.go`
+- Prerequisite: a failing seed
 
 `TestSoakAppsAreIndependent` failed twice in nine loaded suite runs with two worlds
-of one seed differing in their position digest. A headless App ticks on its caller
-with no scheduler goroutine, the streaming GA has no workers, and the domain audit
-only records, so what parallel Apps still share is the payload pools
-(`CharacterTypedPayloadPool`, the batch pools): a payload read after its release is
-the candidate, and moving the pools onto the World the smallest step.
+of one seed differing in their position digest. Not reproduced since in 48 loaded
+runs and four whole-package runs, and ruled out by review: every pooled payload has
+one handler that reads nothing after releasing it, the GA refills deterministically,
+no simulation path reads the wall clock, and no package state a world reads changes
+at run time. A failing seed is what would reopen it.
 
 ## Fleet logging
 

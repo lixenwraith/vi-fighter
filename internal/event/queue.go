@@ -39,12 +39,8 @@ func NewEventQueue() *EventQueue {
 // Push adds event using lock-free CAS with published flags pattern
 // Safe for concurrent producers. O(1) amortized
 func (eq *EventQueue) Push(ev GameEvent) {
-	if w := eq.wire.Load(); w != nil && OnWire(ev) {
-		sequence, taken := w.sink.Cross(ev)
-		if taken {
-			return
-		}
-		ev.CrossingSeq = sequence
+	if w := eq.wire.Load(); w != nil && OnWire(ev) && w.sink.Cross(ev) {
+		return
 	}
 	eq.publish(ev)
 }
@@ -104,12 +100,13 @@ func (eq *EventQueue) SetWireSink(w WireSink) {
 	eq.wire.Store(&wireHolder{sink: w})
 }
 
-// ReceiveWire admits artifacts due before nextTick. Caller holds the world lock.
-func (eq *EventQueue) ReceiveWire(nextTick uint64) int {
+// ReceiveWire admits artifacts due before nextTick and reports whether a session
+// is live. Caller holds the world lock.
+func (eq *EventQueue) ReceiveWire(nextTick uint64) (live bool) {
 	if w := eq.wire.Load(); w != nil {
 		return w.sink.Receive(nextTick)
 	}
-	return 0
+	return false
 }
 
 // FlushWire closes completedTick's production epoch. Caller holds the world lock.

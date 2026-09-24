@@ -134,7 +134,6 @@ type NetworkSystem struct {
 	statJoinLag        *atomic.Int64
 	statLag            *atomic.Int64
 	statStale          *atomic.Bool
-	statLocalNow       *atomic.Int64
 	statCorrections    *atomic.Int64
 	statForged         *atomic.Int64
 
@@ -410,7 +409,6 @@ func NewNetworkSystem(world *engine.World) engine.System {
 	s.statJoinLag = s.intStat(reg, "network.join_lag_ticks")
 	s.statLag = s.intStat(reg, "network.lag_ticks")
 	s.statStale = s.boolStat(reg, "network.stale")
-	s.statLocalNow = s.intStat(reg, "network.crossings_local")
 	s.statCorrections = s.intStat(reg, "network.corrections_received")
 	s.statForged = s.intStat(reg, "network.artifacts_refused")
 	s.statCommitLate = s.intStat(reg, "network.commit_late")
@@ -662,22 +660,20 @@ func (s *NetworkSystem) forgetCrossingFence(participant uint32) {
 	s.mu.Unlock()
 }
 
-// Cross encodes and schedules a crossing when a peer is live. Returning taken=true
-// transfers queue ownership: the local copy is applied by the barrier at the
-// artifact's agreed tick, in the order every other instance applies it, and the
-// pooled original is released after encoding. The one copy published now is a
-// producer-immediate type's, and its sequence follows it through dispatch.
-func (s *NetworkSystem) Cross(ev event.GameEvent) (sequence uint64, taken bool) {
+// Cross encodes and schedules a crossing when a peer is live, taking the event: the
+// local copy is applied by the barrier at the artifact's agreed tick, in the order
+// every other instance applies it, and the pooled original is released after
+// encoding. There is no producer copy published sooner (multi-player.md §3.1).
+func (s *NetworkSystem) Cross(ev event.GameEvent) (taken bool) {
 	if !s.barrierActive.Load() {
-		return 0, false
+		return false
 	}
 	s.mu.Lock()
 	// Named before it is encoded, so this instance's own copy and every peer's
 	// carry one identity: a payload whose shared outcome needs a value no receiver
 	// can re-derive takes it from the artifact rather than from a stream position
-	// the two consume at different ticks. The sequence is therefore assigned first
-	// and given back if the encode fails — nothing outside this lock has seen it,
-	// and a number that is never dispatched would stall the applied prefix at it.
+	// the two consume at different ticks. The sequence is given back if the encode
+	// fails: a number that is never dispatched would stall the applied prefix.
 	s.crossSeq++
 	event.StampCrossing(ev.Payload, s.localSource, s.crossSeq)
 	frame, encErr := event.NewWireFrame(ev)
@@ -686,49 +682,33 @@ func (s *NetworkSystem) Cross(ev event.GameEvent) (sequence uint64, taken bool) 
 		s.encodeErr++
 		s.mu.Unlock()
 		event.ReleaseDeferredPayload(ev.Payload)
-		return 0, true
+		return true
 	}
 	frame.Seq = s.crossSeq
 	applyTick := max(s.productionEpoch+s.delayTicks, s.lastApplyTick)
 	s.lastApplyTick = applyTick
 	s.crossings = append(s.crossings, event.ScheduledWireFrame{Frame: frame, ApplyTick: applyTick})
-	agreed := barrierBound(ev.Type)
-	immediate := producerImmediate(ev.Type)
-	if !immediate {
-		// Counted, never capped. The cap is on what a peer can make this instance
-		// hold; this artifact is this instance's own and has already been broadcast,
-		// so refusing it here would be a divergence rather than a defence.
-		s.scheduled = append(s.scheduled, barrierArtifact{
-			frame: frame, applyTick: applyTick, source: s.localSource, origin: ev.Origin,
-		})
-		s.scheduledBytes += frameBytes(frame)
-	}
-	if agreed {
+	// Counted, never capped. The cap is on what a peer can make this instance hold;
+	// this artifact is this instance's own and has already been broadcast, so
+	// refusing it here would be a divergence rather than a defence.
+	s.scheduled = append(s.scheduled, barrierArtifact{
+		frame: frame, applyTick: applyTick, source: s.localSource, origin: ev.Origin,
+	})
+	s.scheduledBytes += frameBytes(frame)
+	if barrierBound(ev.Type) {
 		// A barrier-bound sequence does not participate in the authority's
 		// local-first capture fence. Close its position now so it cannot leave a
 		// permanent hole in the ordinary sequence prefix; its effect remains
 		// classified by ApplyTick on every instance.
 		s.closeAppliedCrossingLocked(frame.Seq)
 	} else {
-		// Retained for the projection a correction runs, at the tick this instance
-		// applies it: the agreed tick, or the open epoch for a copy the queue
-		// publishes now.
-		localApply := applyTick
-		if immediate {
-			localApply = s.productionEpoch
-		}
-		s.retainLocked(frame, s.productionEpoch, localApply, ev.Origin)
+		// Retained for the projection a correction runs, at the agreed tick.
+		s.retainLocked(frame, s.productionEpoch, applyTick, ev.Origin)
 	}
 	s.mu.Unlock()
-	if !immediate {
-		event.ReleaseDeferredPayload(ev.Payload)
-		s.statDeferred.Add(1)
-		return frame.Seq, true
-	}
-	// Ownership is not taken: the queue publishes this copy now, and what was
-	// scheduled above is the copy the peers get.
-	s.statLocalNow.Add(1)
-	return frame.Seq, false
+	event.ReleaseDeferredPayload(ev.Payload)
+	s.statDeferred.Add(1)
+	return true
 }
 
 // DropUncommitted forgets this instance's own crossings when a handoff moves
@@ -854,15 +834,6 @@ func barrierBound(et event.EventType) bool {
 	default:
 		return false
 	}
-}
-
-// producerImmediate names the crossings a producer applies in the tick that made
-// them rather than at the agreed tick. Gold typing is the whole list: the next
-// keystroke is validated against the members still standing, so a typed member
-// has to be gone before the lead elapses. Everything else waits, which is what
-// makes the shared world identical on every instance at every tick.
-func producerImmediate(et event.EventType) bool {
-	return et == event.EventCompositeMemberDestroyed
 }
 
 // retainLocked adds one of this instance's own crossings to the replay suffix,
@@ -1285,19 +1256,18 @@ func (s *NetworkSystem) Update() {
 	}
 }
 
-// Receive drains transport state and publishes every artifact due before nextTick.
-// Caller holds the world lock.
-func (s *NetworkSystem) Receive(nextTick uint64) int {
-	queued := 0
+// Receive drains transport state, publishes every artifact due before nextTick
+// and reports whether a session is live. Caller holds the world lock.
+func (s *NetworkSystem) Receive(nextTick uint64) (live bool) {
 	p := s.port()
 	s.refreshLink(p)
 	s.publishConnectionTelemetry(p)
 	if s.enabled && p != nil {
-		queued += s.drain(p)
+		s.drain(p)
 	}
-	queued += s.applyDue(nextTick)
+	s.applyDue(nextTick)
 	s.publishBarrierTelemetry(nextTick, p)
-	return queued
+	return s.barrierActive.Load()
 }
 
 // Flush closes completedTick's production epoch, including an empty marker.
@@ -1387,8 +1357,8 @@ func (s *NetworkSystem) linkReport(completedTick uint64) network.LinkReport {
 }
 
 // drain translates one tick's transport notifications into events
-func (s *NetworkSystem) drain(p engine.NetworkPort) int {
-	return s.drainWith(p, p.Drain)
+func (s *NetworkSystem) drain(p engine.NetworkPort) {
+	s.drainWith(p, p.Drain)
 }
 
 // DrainOffTick translates what the endpoint already holds without the poll
@@ -1410,26 +1380,22 @@ func (s *NetworkSystem) DrainOffTick() {
 }
 
 // drainWith is one poll of the endpoint, whichever door it came through.
-func (s *NetworkSystem) drainWith(p engine.NetworkPort, poll func([]network.Inbound) int) int {
+func (s *NetworkSystem) drainWith(p engine.NetworkPort, poll func([]network.Inbound) int) {
 	n := poll(s.buf[:])
-	queued := 0
 	for i := range n {
 		in := &s.buf[i]
 		switch in.Kind {
 		case network.InboundConnect:
 			s.world.PushLocal(event.EventNetworkConnect, &event.NetworkConnectPayload{PeerID: uint32(in.Peer)})
-			queued++
 		case network.InboundDisconnect:
 			s.world.PushLocal(event.EventNetworkDisconnect, &event.NetworkDisconnectPayload{PeerID: uint32(in.Peer)})
 			s.reportDisconnect(uint32(in.Peer), p.PeerCount())
 			s.forgetDigestPeer(uint32(in.Peer))
 			s.noticeDeparture(uint32(in.Peer))
-			queued++
 		case network.InboundMessage:
-			queued += s.dispatchMessage(uint32(in.Peer), in.Msg)
+			s.dispatchMessage(uint32(in.Peer), in.Msg)
 		}
 	}
-	return queued
 }
 
 // reportDisconnect names link loss when it happens. A digest cannot: once the edge
@@ -1623,9 +1589,9 @@ func (s *NetworkSystem) publishConnectionTelemetry(p engine.NetworkPort) {
 // Raw participant input is not one of them — a peer sends the resolved artifact,
 // never the keystroke that produced it — so an unrecognised type is counted and
 // discarded rather than translated.
-func (s *NetworkSystem) dispatchMessage(from uint32, msg *network.Message) int {
+func (s *NetworkSystem) dispatchMessage(from uint32, msg *network.Message) {
 	if msg == nil {
-		return 0
+		return
 	}
 	switch msg.Type {
 	case network.MsgEvent:
@@ -1651,7 +1617,6 @@ func (s *NetworkSystem) dispatchMessage(from uint32, msg *network.Message) int {
 	default:
 		s.statDrop.Add(1)
 	}
-	return 0
 }
 
 // receiveCorrection reassembles one authoritative correction and hands the body to
@@ -2256,7 +2221,7 @@ func (s *NetworkSystem) relayBatch(from uint32, batch event.WireBatch) {
 }
 
 // applyDue publishes due artifacts in the same source/sequence order everywhere.
-func (s *NetworkSystem) applyDue(nextTick uint64) int {
+func (s *NetworkSystem) applyDue(nextTick uint64) {
 	s.writeDueStates(nextTick)
 	s.mu.Lock()
 	due := make([]barrierArtifact, 0, len(s.scheduled))
@@ -2336,7 +2301,6 @@ func (s *NetworkSystem) applyDue(nextTick uint64) int {
 	s.statPeerArtifacts.Store(int64(peer))
 	s.statPeerApplied.Store(peer != 0)
 	s.statRecv.Add(int64(peer))
-	return len(due)
 }
 
 // admissibleFromSource is the host's validation, and it is deliberately narrow.

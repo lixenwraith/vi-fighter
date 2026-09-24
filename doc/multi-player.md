@@ -49,7 +49,7 @@ identity, and giving it a second name would cost the identity space its sentinel
 
 | Area | Current behaviour |
 |---|---|
-| Local input | Every crossing applies at one tick on every instance, its producer's included: the producer stamps it with its own lead and the authority commits it (§3.5). The D-18 prediction answers the keystroke and the weapons fire from the predicted cell; the shared store moves when the crossing applies. The one exception is a typed gold member, which the producer removes at once because the next keystroke validates against the live run. |
+| Local input | Every crossing applies at one tick on every instance, its producer's included: the producer stamps it with its own lead and the authority commits it (§3.5). The D-18 prediction answers the keystroke and the weapons fire from the predicted cell; the shared store moves when the crossing applies. A typed gold member leaves at its tick like everything else; the typist validates its next keystroke against the run without the members it has already typed. |
 | Shared authority | The host's Shared world is canonical. A guest's predicted result is provisional until the next correction. |
 | Player state | Each instance simulates only its Player domain. Owner-authored cursor values have one writer and travel as values; a receiver keeps the values it authors across an install. |
 | Predicted derivations | A shared death a predicting instance derives is stamped `PhasePredicted` and held in a ledger. Presentation follows it; the player-domain rewards behind it are paid once, when an authoritative world proves the entity gone. |
@@ -103,8 +103,8 @@ used to have two: the producer published its own copy at once, and every correct
 read inside the lead described a world without it — the kill was undone and
 re-derived, the knockback rewound, the region's species torn down and rebuilt.
 Input feel is the D-18 prediction's job, not the store's (§3.4 of
-[domain-design.md](domain-design.md)); the one copy still published at once is a
-typed gold member, because the next keystroke validates against the live run.
+[domain-design.md](domain-design.md)), and for a typed gold member it is the
+typist's own record of what it has typed, which the next keystroke validates against.
 
 An artifact that decides what the world *is*, rather than what happens to a world
 both instances already have, is `barrierBound`: it also closes the capture fence at
@@ -211,7 +211,7 @@ on. Everything the projection re-derives as the live world already has it diffs 
 nothing, so a transition the guest has already made is neither torn down nor
 rebuilt, and the clock never moves backwards. `snapshot.projected_ticks` is the
 distance; a capture level with the clock projects zero ticks and still takes the
-open epoch, which is where a typed member and a late-arriving record live.
+open epoch, which is where a late-arriving record lives.
 
 The projection is fed what the capture does not contain and this instance applied
 after it: its own ordinary crossings past the capture's fence for its source, the
@@ -337,9 +337,12 @@ the general RNG section includes the environment stream position, and Shared
 component pages include the species kinetic result. Player drains remain local
 and resume from the same per-tick samples after an install.
 
-Owner-authored cursor cells are excluded when the receiver owns that cursor, and
-cursor control assignment is normalised for both hashing and repair. Those values
-are re-bound locally after installation.
+The owner-authored cells of every cursor a participant owns, the authority's
+included, are outside the hashed surface: each instance holds another's as a mirror
+up to `NetworkSyncTicks` old, the sync stream is their carrier, and comparing them
+made a guest whose peer was fighting repair nearly every manifest. Cursor control
+assignment is normalised for hashing and repair. The correction magnitude leaves
+out the same cells, and all of them are re-bound locally after installation.
 
 The manifest root intentionally excludes tick-local header metadata so a predictor
 can compare state with an earlier authority tick. A shard set must nevertheless
@@ -775,11 +778,11 @@ entry says what is actually absent rather than what is imperfect, and how to see
     impulse the authority had not — is gone, and with it the phase difference in
     the kinetic immunity window. What a hit still costs is the lead itself, paid
     as the distance between the D-18 prediction and the store rather than as input
-    latency. What remains is a two-attacker residual: a crossing that misses the
-    lead is applied late by the authority in arrival order, so which of two hits
-    on one body `SpendKineticImmunity` reports as opening the window can still
-    differ for the length of that lateness; it is in `doc/todo.md` as a choice
-    about who owns the override.
+    latency. A crossing that misses the lead still lands later on the authority
+    than on its producer, so contested outcomes follow the attacker set rather than
+    arrival order: a knockback window's impulses compose to one vector whichever
+    hit opened it, and a kill is credited from the cursors engaged in it for
+    `CombatCreditWindow`, which spans the lateness the commit admits.
 
 ## 9. Verification
 
