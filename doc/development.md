@@ -237,7 +237,7 @@ from terminal 2 — the guest arrives holding the host's world at the tick it ha
 reached. `:session` on either side reports the role, address, identity, the cursor
 slot that identity drives, peers and tick.
 
-Both sides should show `Net: 1` and its round trip, two cursors, and the same shared actors and
+Both sides should show `2P` and its round trip, two cursors, and the same shared actors and
 score/progression after either participant moves, types and fires. Use terminals
 of different sizes and resize one mid-run: the shared map must not follow either
 terminal. Quit the joiner and continue on the host; its badge becomes `Net: down`
@@ -578,7 +578,7 @@ record shapes, scopes, the status registry, the flight recorder, and the
 diagnostic playbooks. This section covers only the build-facing policy.
 
 Replay capture is a separate `vif-jrn-*` JSONL sink. `-j` records every
-non-system-origin event regardless of session log level/scope, and its anchor
+journaled-origin event regardless of session log level/scope, and its anchor
 carries the seed, RNG session, config/corpus identity and fingerprint, fixed
 tick interval, and simulation geometry. `-replay` runs those records through a
 manual-clock App; this is reproduction input, not another diagnostic scope.
