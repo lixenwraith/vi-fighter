@@ -255,9 +255,11 @@ entity. Recording is idempotent, so a re-derivation after a rollback adds nothin
 An install settles the ledger against the world it just wrote: an entity the
 authority does not have is proved dead and raised once as `EventSpeciesKillConfirmed`,
 and one the authority still holds a convergence floor later is dropped as the
-misprediction it was. `LootSystem` and `BoostSystem` consume the confirmed form and
-ignore the predicted one; everything else consumes `EventSpeciesKilled` exactly as
-before, because the capture already reconciles what it holds.
+misprediction it was. So is one past the authority's shared allocator: it existed
+only here, and the install re-issues its id to whatever the authority spawns next.
+`LootSystem` and `BoostSystem` consume the confirmed form and ignore the predicted
+one; everything else consumes `EventSpeciesKilled` exactly as before, because the
+capture already reconciles what it holds.
 
 Three cases close the edges. An instance that stops predicting — it took the term,
 or the last peer went — releases everything it holds, because the world it predicted
@@ -715,10 +717,9 @@ entry says what is actually absent rather than what is imperfect, and how to see
    `event.EmitDeath` stays where it is: moving it to `World` was a preference, not
    a boundary fix.
 
-   What is left of gap 7 is the last item on its list: `combat.` and `kills.` are
-   excluded from the compared shared surface because they aggregate both domains
-   into one set of counters. Splitting them per domain is what would let them back
-   in, and that is a telemetry redesign rather than a boundary fix.
+   The last item on its list is closed too: `kills.*` is compared and carried in
+   `MetaSystem`'s record, which the systems section hashes, and `combat.*` is
+   telemetry nothing decides on.
 
 ### Open
 
