@@ -2,47 +2,43 @@ package visual
 
 import "github.com/lixenwraith/color"
 
-// Heat256LUT contains xterm 256-palette indices for 10 heat segments
-// Progression: deep red → orange → yellow → green → cyan → blue → purple
-var Heat256LUT = [10]uint8{
-	color.P256Red,         // 0-10%
-	color.P256RedOrange,   // 10-20%
-	color.P256Orange,      // 20-30%
-	color.P256Gold,        // 30-40%
-	color.P256YellowGreen, // 40-50%
-	color.P256Green,       // 50-60%
-	color.P256Cyan,        // 60-70%
-	color.P256CobaltBlue,  // 70-80%
-	color.P256Indigo,      // 80-90%
-	color.P256Purple,      // 90-100%
-}
-
-// Glyph256LUT is GlyphColorLUT for 256 colors: its three levels stay apart in xterm and,
-// through the Linux console's 16 colors, Dark stays apart from Normal and Bright. Blue sits
-// on the cube's cyan side, where no common console palette turns it near-black.
-var Glyph256LUT = [5][3]uint8{
-	{color.Cube256(0, 2, 0), color.Cube256(0, 5, 0), color.Cube256(1, 5, 1)}, // Green
-	{color.Cube256(1, 2, 3), color.Cube256(1, 3, 5), color.Cube256(2, 3, 5)}, // Blue
-	{color.Cube256(3, 0, 0), color.Cube256(5, 0, 0), color.Cube256(5, 1, 1)}, // Red
-	{color.Cube256(5, 5, 5), color.Cube256(5, 5, 5), color.Cube256(5, 5, 5)}, // White
-	{color.P256Yellow, color.P256Yellow, color.P256Yellow},                   // Gold
-}
-
-// 256-color palette indices for energy-based shield colors
+// The sixteen colors of a text console, which 256-color mode draws for; a 256-color table names
+// these to get exactly the console color it means. On a console with eight backgrounds, a bright
+// entry drawn as a background shows as its normal counterpart.
 const (
-	Shield256Positive = color.P256Yellow // Bright yellow
-	Shield256Negative = color.P256Violet // Violet
+	ConBlack uint8 = iota
+	ConRed
+	ConGreen
+	ConYellow
+	ConBlue
+	ConMagenta
+	ConCyan
+	ConWhite
+	ConGray
+	ConBrightRed
+	ConBrightGreen
+	ConBrightYellow
+	ConBrightBlue
+	ConBrightMagenta
+	ConBrightCyan
+	ConBrightWhite
 )
 
-// Lightning256ColorLUT is the background palette index per lightning color type. Purple
-// keeps red at cube level 4, the least a Linux console background shows as red.
-var Lightning256ColorLUT = [5]uint8{
-	color.P256Cyan,         // Bright cyan
-	color.P256Red,          // Bright red
-	color.P256Gold,         // Yellow-orange
-	color.P256Green,        // Bright green
-	color.Cube256(4, 1, 5), // Violet
+// Heat256LUT holds the heat bar's ten segments, red through purple; eight backgrounds leave
+// six hues in the same order
+var Heat256LUT = [10]uint8{
+	ConRed, ConBrightRed, ConYellow, ConBrightYellow, ConGreen,
+	ConBrightGreen, ConCyan, ConBlue, ConBrightBlue, ConMagenta,
 }
+
+// Energy-based shield rims
+const (
+	Shield256Positive = ConBrightYellow
+	Shield256Negative = ConMagenta
+)
+
+// Lightning256ColorLUT is the background per lightning color type: cyan, red, gold, green, violet
+var Lightning256ColorLUT = [5]uint8{ConBrightCyan, ConBrightRed, ConBrightYellow, ConBrightGreen, ConBrightMagenta}
 
 // SpiritBaseOffsets color determines starting point in gradient (0-255) for spirit animation coloring
 // Uses existing HeatGradientLUT, progress maps to LUT range based on base color offset
@@ -57,20 +53,41 @@ var SpiritBaseOffsets = [8]int{
 	224, // White (wrap to red)
 }
 
-// 256-colors palette indices
+// 256-color entity colors
 const (
-	// Missile
-	Missile256Trail = color.P256Amber  // (5,3,0)
-	Missile256Base  = color.P256Orange // (5,2,0)
-
-	// Swarm charge line
-	SwarmChargeLine256Palette = color.P256Orchid // (4,2,4)
-
-	// Loot shield
-	Loot256Rim = color.P256Rose // (5,0,2)
-
-	Bullet256StormRed = color.P256Red // (5,0,0)
+	Missile256Trail           = ConYellow
+	Missile256Base            = ConBrightYellow
+	SwarmChargeLine256Palette = ConMagenta
+	// Loot256Rim is the magenta the Linux console showed its rose rim as, which reads well
+	Loot256Rim        = ConBrightMagenta
+	Quasar256Rim      = ConWhite
+	Bullet256StormRed = ConBrightRed
 )
+
+// Effects the console cannot blend, drawn solid where TrueColor's blend is strong enough to show
+const (
+	Pulse256Positive  = ConBrightYellow
+	Pulse256Negative  = ConBrightMagenta
+	QuasarZap256Idle  = ConCyan
+	QuasarZap256Armed = ConRed
+	// Storm256Ring marks the near storm sphere, the one that can be hit
+	Storm256Ring       = ConWhite
+	Storm256GreenPulse = ConBrightGreen
+	Storm256Muzzle     = ConBrightYellow
+	Storm256BlueGlow   = ConYellow
+	// Effect256Threshold is the least blend alpha a solid 256-color effect cell stands for
+	Effect256Threshold = 0.25
+)
+
+// Storm256Bodies is each storm sphere's flat body, by StormCircleType
+var Storm256Bodies = [3]uint8{ConGreen, ConRed, ConBlue}
+
+// Explosion256 is each explosion type's edge, mid and core color: dust, missile, eye
+var Explosion256 = [3][3]uint8{
+	{ConBlue, ConCyan, ConBrightCyan},
+	{ConRed, ConYellow, ConBrightWhite},
+	{ConMagenta, ConBrightMagenta, ConBrightWhite},
+}
 
 // Palette256RGB returns the xterm RGB of a 256-color index, so an RGB blend can compose
 // over a palette cell; indices 0-15 take the VGA system colors

@@ -210,12 +210,15 @@ which concrete renderer produced them:
 
 - grayout desaturates glyphs while excluding guidance, fields, transients,
   composites, health bars, and UI;
-- dim scales every category except UI;
+- dim scales every category except UI; on a text console, where a halved color
+  is mostly black, it grays them instead;
 - the truecolor finalizer dims selected occupied backgrounds under glyphs;
-- strobe supplies a deferred background overlay for otherwise untouched cells.
+- strobe supplies a deferred background overlay for otherwise untouched cells;
+  a console shows it in one step, in its nearest background, while the envelope
+  is past half its peak.
 
-`MutateDim` and `MutateGrayscale` skip foreground/background channels marked as
-256-color indices. This avoids corrupting palette values with RGB arithmetic.
+An RGB write, blend or mutation over a 256-color index first resolves the index
+to its color, so no arithmetic ever runs on an index.
 
 ## 6. Finalization and color modes
 
@@ -236,13 +239,25 @@ a UI or debug layer that legitimately reaches into the margin keeps the colors
 it composed, and the pass walks the four margin bands rather than the whole
 area. Setting `RgbVoid` to `RgbBackground` restores the undifferentiated look.
 
+In 256-color mode the game draws for a text console, and a last pass settles
+every cell on one of the console's sixteen colors. The palette is the Linux
+console's live one (`/sys/module/vt/parameters/default_*`, which `setvtrgb`
+writes), FreeBSD vt's default, or VGA; it is in `Config.ConsolePalette` for
+renderers that pick colors from it. An entry (0-15) passes through, an xterm
+index keeps its hue family by the rules FreeBSD's teken documents, and RGB takes
+the nearest entry in CIELAB, except that the theme background is the console's
+black. Text that would vanish into its background, or UI text under a 2.5
+contrast ratio, takes the nearest entry that shows. Styles are resolved rather
+than sent, because the Linux console recolors dim, italic and underlined text
+and FreeBSD brightens bold.
+
 Finalization is immediately followed by the terminal module's full-buffer
 `Flush`.
 
-The CLI can force xterm-256 (`-color 256`) or truecolor (`-color true`);
-`-color auto`, the default, lets the terminal capability select the mode. Visual parameter files provide truecolor and
-palette-specific values. Renderer logic should not assume every color channel
-contains RGB.
+The CLI can force 256-color (`-color 256`) or truecolor (`-color true`);
+`-color auto`, the default, lets the terminal capability select the mode. Visual
+parameter files provide truecolor and palette-specific values. Renderer logic
+should not assume every color channel contains RGB.
 
 ## 7. Layer inventory
 
@@ -327,7 +342,11 @@ draws a fixed priority of items: session badge, time control, FSM phase, energy,
 damage multiplier, boost, grid state, and lower-priority metrics that are dropped
 first when space is tight. Typed input takes the space it needs from them; a
 status message takes only what they leave, so a notice never reflows the bar, and
-every message expires on wall time at `StatusMessageMaxDuration` or sooner.
+every message expires on wall time at `StatusMessageMaxDuration` or sooner. Its
+colors come from one palette per color mode: the theme's in truecolor, and on a
+text console fixed entries, each apart from the items beside it and with the text
+that reads best on it. The audio state is a letter: X muted, S effects, M music,
+O both.
 
 The relative row and column gutters number only the rows and columns the
 playfield covers and mark the rest with the void color, so the chrome agrees
@@ -358,7 +377,10 @@ retains only game-specific asset interpretation and layering.
 3. Register the constructor in `internal/manifest/definition.go`.
 4. Run manifest generation.
 5. Select/test truecolor and 256-color paths, including foreground/background
-   palette attributes.
+   palette attributes. A 256 path names console entries (`visual.Con*`), draws
+   what the console cannot blend as solid cells past
+   `visual.Effect256Threshold`, and keeps to glyphs every console font has
+   (`TestConsoleGlyphsAreInEveryConsoleFont`).
 6. Verify behavior under camera cropping, centered small maps, terminal resize,
    pause, grayout/dim/strobe, and overlapping fields.
 7. Check that terminal flush remains outside the world lock and that no
