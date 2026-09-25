@@ -228,6 +228,19 @@ type cursorPrediction struct {
 	count  int
 	shed   int
 	latest component.PositionComponent
+
+	// pointer is the placement the pointer has named since the last tick, not yet
+	// crossed. Its cell is the ring's newest, retargeted by every later report, so
+	// a sweep crosses one placement a tick however many cells it passed.
+	pointer pendingPointer
+}
+
+// pendingPointer is one uncrossed pointer placement and the origin it was reported
+// under, which it keeps for the journal and APM when it crosses.
+type pendingPointer struct {
+	x, y   int
+	origin event.Origin
+	set    bool
 }
 
 // CursorRosterEntry is the instance-local control assignment for one shared
@@ -391,6 +404,18 @@ func (pr *PlayerResource) Predict(pos component.PositionComponent) {
 	q.latest = pos
 }
 
+// Retarget moves the newest prediction to a cell the pointer named since, for a
+// pointer placement that has not crossed yet.
+func (pr *PlayerResource) Retarget(pos component.PositionComponent) {
+	q := &pr.prediction
+	if q.count == 0 {
+		pr.Predict(pos)
+		return
+	}
+	q.cells[(q.head+q.count-1)%len(q.cells)] = pos
+	q.latest = pos
+}
+
 // Reconcile settles one announced placement of the local cursor. Own is one this
 // instance's barrier applied from its own crossing: those land in the order they
 // were produced, so each consumes the oldest outstanding one whatever cell a
@@ -406,19 +431,10 @@ func (pr *PlayerResource) Reconcile(pos component.PositionComponent, own bool) {
 		q.head = (q.head + 1) % len(q.cells)
 		q.count--
 	case !own && q.count > 0:
-		pr.prediction = cursorPrediction{shed: q.shed + q.count}
+		// A pointer placement not yet crossed is a request still to send, not a
+		// prediction, so the snap keeps it
+		pr.prediction = cursorPrediction{shed: q.shed + q.count, pointer: q.pointer}
 	}
-}
-
-// KeepPredictions trims the queue to the own placements still pending, newest
-// kept: an install that proves some already applied discards them unannounced.
-func (pr *PlayerResource) KeepPredictions(pending int) {
-	q := &pr.prediction
-	if drop := q.count - pending; drop > 0 {
-		q.head = (q.head + drop) % len(q.cells)
-		q.count = pending
-	}
-	q.shed = max(pending-q.count, 0)
 }
 
 // DropPrediction abandons every outstanding prediction, so the local cell reads
@@ -1042,8 +1058,8 @@ type NetworkResource struct {
 	Pace     atomic.Int32
 	PaceStep atomic.Int64
 
-	// CommitLate counts, per source, the crossings that reached this instance after
-	// the tick they named while it was authoring: the eviction policy's input.
+	// CommitLate counts, per source, the epochs that reached this instance with a
+	// crossing past the tick it named while it was authoring: the eviction input.
 	CommitLate [parameter.MaxPlayers + 2]atomic.Uint64
 
 	// OnTickClosed runs under the world lock after every completed tick, so the
