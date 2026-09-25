@@ -27,6 +27,7 @@ type slotState struct {
 	revealN     int       // >0: per-bar progressive track reveal on incoming pattern
 	fillSavedID PatternID // slot 2: restored after auto-fill bar
 	inFill      bool
+	drawn       bool // the tier's pool chose this slot's pattern, so a phrase may vary it
 }
 
 func (ss *slotState) player() *PatternPlayer {
@@ -74,7 +75,7 @@ const seqStream = 0x9E3779B97F4A7C15 // fixed PCG stream selector; seed varies p
 // Mixer-goroutine confined: no synchronization
 type Sequencer struct {
 	bpm            int
-	pendingBPM     int // applied at next bar boundary; 0 = none
+	pendingBPM     int // applied at next beat boundary; 0 = none
 	samplesPerStep int
 	swing          float64
 	volume         float64
@@ -98,9 +99,9 @@ type Sequencer struct {
 	slotPat  [MusicSlots]atomic.Int32
 	autoFill bool
 
-	// tier table, registered before playback, applied by SetIntensity
-	arrangements [IntensityCount]Arrangement
-	tier         Intensity
+	// tier pools, set at engine Start, drawn from by SetIntensity
+	tiers tierPools
+	tier  Intensity
 
 	running bool
 }
@@ -110,7 +111,7 @@ func NewSequencer(bpm int, kit *drumKit) *Sequencer {
 		harmony:  newHarmony(),
 		gains:    [MusicSlots]float64{0.7, 0.5, 0.5},
 		rng:      rand.New(rand.NewPCG(1, seqStream)),
-		gen:      newMelodyGen(), // pattern registered in InitDefaultPatterns before mixer exists
+		gen:      newMelodyGen(), // pattern registered at engine Start before the mixer exists
 		volume:   1.0,
 		autoFill: true,
 	}
@@ -135,7 +136,8 @@ func (s *Sequencer) SetBPM(bpm int, quantize bool) {
 	} else if bpm > MaxBPM {
 		bpm = MaxBPM
 	}
-	// bar-quantized tempo application removes mid-bar step-grid lurch
+	// beat-quantized: a tempo change never splits a beat, and a slewed ramp moves
+	// in steps of a beat rather than lurching once a bar
 	if quantize && s.running {
 		s.pendingBPM = bpm
 		return
@@ -176,7 +178,7 @@ func (s *Sequencer) Generate(buf []float64) {
 		return
 	}
 	for i := range buf {
-		// live samplesPerStep read — pending BPM applies mid-buffer at bars
+		// live samplesPerStep read — pending BPM applies mid-buffer at beats
 		spS := int64(s.samplesPerStep)
 		effectiveStepLen := spS
 		if s.swing > 0 {
@@ -192,11 +194,14 @@ func (s *Sequencer) Generate(buf []float64) {
 			s.samplePos = 0
 			s.currentStep = (s.currentStep + 1) % int64(MaxPatternLen)
 
+			if s.currentStep%int64(StepsPerBeat) == 0 {
+				s.applyPendingBPM()
+			}
 			if s.currentStep%int64(StepsPerBar) == 0 {
 				s.barCount++
 				s.harmony.advanceBar()
-				s.applyPendingBPM()
 				s.applyPendingTransitions()
+				s.updateVariation()
 				s.updateReveal()
 				s.updateFill()
 				s.updateMelodyGen()
@@ -310,6 +315,27 @@ func (s *Sequencer) updateFill() {
 	}
 }
 
+// updateVariation swaps one drawn slot for another member of its tier's pool on
+// each phrase downbeat, alternating melody and rhythm, so a held tier keeps moving.
+// A slot mid-transition or mid-reveal is left to finish.
+func (s *Sequencer) updateVariation() {
+	if s.barCount%PhraseBars != 0 {
+		return
+	}
+	slot := int(s.barCount/PhraseBars) % 2
+	ss := &s.slots[slot]
+	pool := s.tiers[s.tier][slot]
+	if !ss.drawn || len(pool) < 2 || ss.pending != nil || ss.fading || ss.revealN > 0 {
+		return
+	}
+	// Uniform over the other members: the last stands in for a draw of the current
+	i := s.rng.IntN(len(pool) - 1)
+	if pool[i] == ss.activeID() {
+		i = len(pool) - 1
+	}
+	s.startTransition(slot, pool[i], MinCrossfadeSamples)
+}
+
 // updateMelodyGen regenerates the generative lead once per bar while active
 // Unquantized starts play bass-only until the next bar seeds the lead
 func (s *Sequencer) updateMelodyGen() {
@@ -318,7 +344,11 @@ func (s *Sequencer) updateMelodyGen() {
 	}
 }
 
+// SetPattern places a pattern explicitly, which phrase variation then leaves alone
 func (s *Sequencer) SetPattern(slot int, p PatternID, crossfadeSamples int, quantize bool) {
+	if slot >= 0 && slot < MusicSlots {
+		s.slots[slot].drawn = false
+	}
 	s.setPattern(slot, p, crossfadeSamples, quantize, false)
 }
 
@@ -399,26 +429,39 @@ func (s *Sequencer) Reset() {
 		ss.xPos, ss.xLen = 0, 0
 		ss.revealN = 0
 		ss.inFill = false
+		ss.drawn = false
 	}
 	s.publish()
 }
 
-// SetArrangement registers the pattern set for a tier
-func (s *Sequencer) SetArrangement(t Intensity, a Arrangement) {
-	if t >= 0 && t < IntensityCount {
-		s.arrangements[t] = a
-	}
-}
-
-// SetIntensity applies a registered tier to the rhythm and melody slots
+// SetIntensity draws the tier's rhythm and melody from its pools. A slot already
+// sounding its draw keeps playing, rather than restarting under a crossfade and
+// a reveal that would strip it back to one track.
 func (s *Sequencer) SetIntensity(t Intensity, crossfadeSamples int, quantize, reveal bool) {
 	if t < 0 || t >= IntensityCount {
 		return
 	}
 	s.tier = t
-	a := s.arrangements[t]
-	s.setPattern(0, a.Rhythm, crossfadeSamples, quantize, reveal)
-	s.setPattern(1, a.Melody, crossfadeSamples, quantize, reveal)
+	for slot, pool := range s.tiers[t] {
+		s.slots[slot].drawn = true
+		if id := s.draw(pool); id != s.slots[slot].activeID() {
+			s.setPattern(slot, id, crossfadeSamples, quantize, reveal)
+		} else {
+			s.slots[slot].pending = nil
+		}
+	}
+}
+
+// draw picks one pool member; a single member costs no rng, so a fixed
+// arrangement plays the same music for a given seed as it always has
+func (s *Sequencer) draw(pool []PatternID) PatternID {
+	switch len(pool) {
+	case 0:
+		return PatternSilence
+	case 1:
+		return pool[0]
+	}
+	return pool[s.rng.IntN(len(pool))]
 }
 
 // ReloadPattern re-resolves any slot pointing at id after the registry replaced

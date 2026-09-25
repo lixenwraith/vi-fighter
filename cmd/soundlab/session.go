@@ -24,7 +24,7 @@ type Session struct {
 	out    io.Writer
 
 	// bpm mirrors the last requested tempo so `note` can size durations in
-	// steps. The sequencer clamps and bar-quantizes its own copy; one pending
+	// steps. The sequencer clamps and beat-quantizes its own copy; one pending
 	// change of skew does not matter for an audition length.
 	bpm      int
 	startErr error
@@ -35,12 +35,15 @@ func NewSession(backend string, masterVol float64, out io.Writer) (*Session, err
 	cfg.Enabled = true
 	cfg.MasterVolume = masterVol
 	cfg.ForceBackend = backend
-	// The same bank the game registers, from the same embedded asset.
+	// The same banks the game registers, from the same embedded assets.
 	base, err := parameter.BuiltinSounds()
 	if err != nil {
 		return nil, err
 	}
 	cfg.BaseSounds = base
+	if cfg.BasePatterns, err = parameter.BuiltinPatterns(); err != nil {
+		return nil, err
+	}
 
 	eng, err := audio.NewAudioEngine(cfg)
 	if err != nil {
@@ -141,10 +144,9 @@ func (s *Session) seedBuiltinSounds() error {
 	return nil
 }
 
-// seedBuiltinPatterns snapshots the registry rather than calling
-// BuiltinPatternDefs: that helper re-runs InitDefaultPatterns and carries a
-// no-mixer precondition, while the engine already registered everything at
-// Start. Def() allocates, so live mixer pointers are untouched.
+// seedBuiltinPatterns snapshots the registry, which Start filled from the shipped
+// bank plus the code-owned melody_gen. Def() allocates, so live mixer pointers are
+// untouched.
 func (s *Session) seedBuiltinPatterns() error {
 	var defs []*audio.PatternDef
 	for _, p := range audio.RegisteredPatterns() {

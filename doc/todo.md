@@ -189,25 +189,15 @@ operator's.
 
 ## Audio
 
-### Surface malformed user sound configuration during play
-
-- Priority: P1
-- Affected files: `internal/service/adapter_audio.go`
-- Prerequisite: choose the in-game error surface
-
-Fallback currently succeeds silently during play while `-check` reports the
-error. Expose the latched `AudioEngine.SpecError()` without making fallback
-fatal.
-
-### Move built-in music patterns into an editable asset
+### Resolve soundlab's audio documents as the game does
 
 - Priority: P2
-- Affected files: `cmd/soundlab/session.go`, `pkg/audio`,
-  `internal/asset/audio/music.toml`
-- Prerequisite: define and validate the pattern document
+- Affected files: `cmd/soundlab/main.go`, `cmd/soundlab/session.go`
 
-Replace the built-in Go registry literals with `internal/asset/audio/music.toml`
-so `soundlab` edits the same data the game loads.
+Soundlab registers only the embedded banks and saves an untitled document to the
+user root, while the game resolves `audio/music.toml` and `audio/sounds.toml`
+through `-config-dir`, the user root and an install's XDG system roots. Load both
+through `resource.Audio` as the game's overrides, and take `-config-dir`.
 
 ### Make the mixer buffer configurable
 
@@ -217,25 +207,6 @@ so `soundlab` edits the same data the game loads.
   sizes before the mixer or backend starts
 
 Replace the compile-time 50 ms mixer buffer with a construction-time setting.
-
-### Decide reveal behavior for manual intensity decreases
-
-- Priority: P3
-- Affected files: `internal/system/music.go`
-- Prerequisite: deterministic rising and falling transition coverage around
-  `applyArrangement`
-
-Manual intensity changes always use per-bar track reveal, while automatic
-changes reveal only when intensity rises. Decide whether manual decreases should
-retain that distinction.
-
-### Pause the mixer with replay playback
-
-- Priority: P3
-- Affected files: `internal/app/play.go`
-
-A replay's SPACE stops the ticks, not the mixer, so music plays on over a paused
-replay; the viewer's command line does pause it, through the game's pause.
 
 ## Multiplayer
 
