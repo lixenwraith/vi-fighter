@@ -35,7 +35,7 @@ const (
 	GenotypeBit
 	LightningBit
 	MissileBit
-	PulseBit
+	MountBit
 	SpiritBit
 	MaterializeBit
 	TargetBit
@@ -92,7 +92,7 @@ type Component struct {
 	Genotype     *Store[component.GenotypeComponent]
 	Lightning    *Store[component.LightningComponent]
 	Missile      *Store[component.MissileComponent]
-	Pulse        *Store[component.PulseComponent]
+	Mount        *Store[component.MountComponent]
 	Spirit       *Store[component.SpiritComponent]
 	Materialize  *Store[component.MaterializeComponent]
 	Target       *Store[component.TargetComponent]
@@ -148,7 +148,7 @@ func initComponents(w *World) {
 	w.Components.Genotype = NewStore[component.GenotypeComponent](w, GenotypeBit)
 	w.Components.Lightning = NewStore[component.LightningComponent](w, LightningBit)
 	w.Components.Missile = NewStore[component.MissileComponent](w, MissileBit)
-	w.Components.Pulse = NewStore[component.PulseComponent](w, PulseBit)
+	w.Components.Mount = NewStore[component.MountComponent](w, MountBit)
 	w.Components.Spirit = NewStore[component.SpiritComponent](w, SpiritBit)
 	w.Components.Materialize = NewStore[component.MaterializeComponent](w, MaterializeBit)
 	w.Components.Target = NewStore[component.TargetComponent](w, TargetBit)
@@ -269,8 +269,8 @@ func (w *World) removeEntity(e core.Entity) {
 	if mask&MissileBit != 0 {
 		w.Components.Missile.RemoveEntity(e, true)
 	}
-	if mask&PulseBit != 0 {
-		w.Components.Pulse.RemoveEntity(e, true)
+	if mask&MountBit != 0 {
+		w.Components.Mount.RemoveEntity(e, true)
 	}
 	if mask&SpiritBit != 0 {
 		w.Components.Spirit.RemoveEntity(e, true)
@@ -444,8 +444,8 @@ func (w *World) removeEntitiesBatch(entities []core.Entity) {
 	if union&MissileBit != 0 {
 		w.Components.Missile.RemoveBatch(entities, true)
 	}
-	if union&PulseBit != 0 {
-		w.Components.Pulse.RemoveBatch(entities, true)
+	if union&MountBit != 0 {
+		w.Components.Mount.RemoveBatch(entities, true)
 	}
 	if union&SpiritBit != 0 {
 		w.Components.Spirit.RemoveBatch(entities, true)
@@ -559,7 +559,7 @@ func (w *World) wipeAll() {
 	w.Components.Genotype.ClearAllComponents()
 	w.Components.Lightning.ClearAllComponents()
 	w.Components.Missile.ClearAllComponents()
-	w.Components.Pulse.ClearAllComponents()
+	w.Components.Mount.ClearAllComponents()
 	w.Components.Spirit.ClearAllComponents()
 	w.Components.Materialize.ClearAllComponents()
 	w.Components.Target.ClearAllComponents()

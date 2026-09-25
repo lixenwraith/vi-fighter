@@ -38,6 +38,12 @@ const (
 
 	// CombatDamagePulse is damage per pulse stun hit
 	CombatDamagePulse = 1
+
+	// CombatDamageBullet is damage per turret bullet hit
+	CombatDamageBullet = 1
+
+	// CombatDamageBeam is damage per member a beam covers
+	CombatDamageBeam = 1
 )
 
 // Timers
@@ -124,4 +130,49 @@ const (
 
 	// PulseEffectDuration is pulse visual effect duration
 	PulseEffectDuration = 250 * time.Millisecond
+
+	// PulseEffectCap is the maximum number of concurrent pulse rings; the oldest is replaced
+	PulseEffectCap = 16
+)
+
+// Mounted weapons: a hit costs a cursor energy through an active shield, heat without one
+const (
+	HostedRodRange  = 20.0 // cells, horizontal; vertical is half
+	HostedRodEnergy = 500
+	HostedRodHeat   = 5
+
+	HostedLauncherRange  = 40.0
+	HostedLauncherEnergy = 1000
+	HostedLauncherHeat   = 10
+
+	HostedDisruptorEnergy = 500
+	HostedDisruptorHeat   = 5
+
+	HostedTurretRange  = 40.0
+	HostedTurretEnergy = 100
+	HostedTurretHeat   = 10
+
+	HostedBeamEnergy = 250 // per strike, every BeamHitInterval inside a firing beam
+	HostedBeamHeat   = 5
+
+	// MissileHostedMaxSpeed keeps a mounted launcher's missile outrunnable (cells/sec)
+	MissileHostedMaxSpeed = 40.0
+)
+
+// Beams: a cursor's fires at once for BeamFlash; a mount's warns, fires, then rests
+const (
+	BeamWidth       = 3    // cells across, centre included
+	BeamMaxLength   = 60.0 // cells along; the first wall stops it sooner
+	BeamFlash       = 200 * time.Millisecond
+	BeamWarning     = 750 * time.Millisecond
+	BeamFiring      = 1000 * time.Millisecond
+	BeamHitInterval = 250 * time.Millisecond
+	BeamEffectCap   = 16
+)
+
+// Turret bullets, a cursor's and a mount's alike
+const (
+	TurretBulletSpeed     = 50.0 // cells/sec
+	TurretSpreadHalfAngle = 0.26 // radians (~15°)
+	TurretBulletLifetime  = 4 * time.Second
 )

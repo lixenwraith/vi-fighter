@@ -4,16 +4,24 @@ import (
 	"time"
 
 	"github.com/lixenwraith/color"
+	"github.com/lixenwraith/vi-fighter/internal/component"
 	"github.com/lixenwraith/vi-fighter/internal/event"
 	"github.com/lixenwraith/vi-fighter/internal/parameter"
+	"github.com/lixenwraith/vi-fighter/pkg/vmath"
 )
 
-// TransientResource holds player-domain spatial explosion presentation.
+// TransientResource holds player-domain spatial explosion, pulse and beam presentation.
 // Systems write, renderers read. All fields are render-frame stable.
 type TransientResource struct {
 	// Fixed backing, zero alloc
 	ExplosionBacking [parameter.ExplosionCenterCap]ExplosionCenter
 	ExplosionCount   int
+
+	PulseBacking [parameter.PulseEffectCap]PulseEffect
+	PulseCount   int
+
+	BeamBacking [parameter.BeamEffectCap]BeamEffect
+	BeamCount   int
 }
 
 // ViewResource holds player-domain screen-space effect state; never replicated.
@@ -47,6 +55,23 @@ type ExplosionCenter struct {
 	Type      event.ExplosionType // Explosion variant for palette selection
 }
 
+// PulseEffect is one disruptor ring for rendering, fixed at its firing cell
+type PulseEffect struct {
+	X, Y    int
+	Age     int64 // Nanoseconds since spawn
+	DurNano int64 // Lifetime in nanoseconds
+	Palette component.WeaponPalette
+}
+
+// BeamEffect is one beam for rendering: its warning line, then its band
+type BeamEffect struct {
+	Band        vmath.Band
+	Age         int64 // Nanoseconds since the warning began
+	WarningNano int64
+	DurNano     int64 // Warning and firing together
+	Palette     component.WeaponPalette
+}
+
 // NewTransientResource creates initialized resource
 func NewTransientResource() *TransientResource {
 	return &TransientResource{}
@@ -70,7 +95,21 @@ func (r *TransientResource) ExplosionCenters() []ExplosionCenter {
 	return r.ExplosionBacking[:r.ExplosionCount]
 }
 
-// ClearExplosions resets explosion state
-func (r *TransientResource) ClearExplosions() {
+// Clear drops every explosion center, pulse ring and beam
+func (r *TransientResource) Clear() {
 	r.ExplosionCount = 0
+	r.PulseCount = 0
+	r.BeamCount = 0
+}
+
+// --- Pulse API ---
+
+// PulseEffects returns active slice view (no allocation)
+func (r *TransientResource) PulseEffects() []PulseEffect {
+	return r.PulseBacking[:r.PulseCount]
+}
+
+// BeamEffects returns active slice view (no allocation)
+func (r *TransientResource) BeamEffects() []BeamEffect {
+	return r.BeamBacking[:r.BeamCount]
 }

@@ -4,7 +4,7 @@ package event
 
 // EventTypeCount is the number of declared EventType constants, including EventNone
 // Values are contiguous in [0, EventTypeCount)
-const EventTypeCount = 174
+const EventTypeCount = 177
 
 // InitRegistry populates the registry from the EventType const block in type.go
 // Must be called once at startup
@@ -74,6 +74,7 @@ func InitRegistry() {
 	RegisterType("EventWeaponAddRequest", EventWeaponAddRequest, &WeaponAddRequestPayload{})
 	RegisterType("EventWeaponFireRequest", EventWeaponFireRequest, &WeaponFireRequestPayload{})
 	RegisterType("EventFireSpecialRequest", EventFireSpecialRequest, &FireSpecialRequestPayload{})
+	RegisterType("EventMountRequest", EventMountRequest, &MountRequestPayload{})
 	RegisterType("EventHeatAddRequest", EventHeatAddRequest, &HeatAddRequestPayload{})
 	RegisterType("EventHeatSetRequest", EventHeatSetRequest, &HeatSetRequestPayload{})
 	RegisterType("EventHeatSpendRequest", EventHeatSpendRequest, &HeatSpendRequestPayload{})
@@ -94,6 +95,8 @@ func InitRegistry() {
 	RegisterType("EventExplosionBatchRequest", EventExplosionBatchRequest, &ExplosionBatchRequestPayload{})
 	RegisterType("EventExplosionVisualRequest", EventExplosionVisualRequest, &ExplosionVisualRequestPayload{})
 	RegisterType("EventExplosionVisualBatchRequest", EventExplosionVisualBatchRequest, &ExplosionVisualBatchRequestPayload{})
+	RegisterType("EventPulseVisualRequest", EventPulseVisualRequest, &PulseVisualRequestPayload{})
+	RegisterType("EventBeamVisualRequest", EventBeamVisualRequest, &BeamVisualRequestPayload{})
 	RegisterType("EventDustSpawnOneRequest", EventDustSpawnOneRequest, &DustSpawnOneRequestPayload{})
 	RegisterType("EventDustSpawnBatchRequest", EventDustSpawnBatchRequest, nil)
 	RegisterType("EventDustAllRequest", EventDustAllRequest, nil)
@@ -254,6 +257,7 @@ var eventClasses = [EventTypeCount]EventClass{
 	EventWeaponAddRequest:                ClassLocal,
 	EventWeaponFireRequest:               ClassLocal,
 	EventFireSpecialRequest:              ClassLocal,
+	EventMountRequest:                    ClassShared,
 	EventHeatAddRequest:                  ClassLocal,
 	EventHeatSetRequest:                  ClassLocal,
 	EventHeatSpendRequest:                ClassLocal,
@@ -274,6 +278,8 @@ var eventClasses = [EventTypeCount]EventClass{
 	EventExplosionBatchRequest:           ClassBus,
 	EventExplosionVisualRequest:          ClassLocal,
 	EventExplosionVisualBatchRequest:     ClassLocal,
+	EventPulseVisualRequest:              ClassLocal,
+	EventBeamVisualRequest:               ClassLocal,
 	EventDustSpawnOneRequest:             ClassLocal,
 	EventDustSpawnBatchRequest:           ClassLocal,
 	EventDustAllRequest:                  ClassLocal,

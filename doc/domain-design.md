@@ -82,7 +82,7 @@ never enters the replay suffix (D-9).
 | Personal drain death affecting shared progression | owner cursor |
 | Typing or nugget cursor advance | cursor and absolute destination cell |
 | Pointer placement | cursor and the newest cell the pointer named that tick |
-| Owned shield striking shared species | target/member set and owner cursor |
+| Owned shield or beam striking shared species | target/member set and owner cursor |
 | Cursor entering or leaving combined defeat state | cursor and state |
 
 Effects on Player targets do not cross. Shared follow-up events derived from a
@@ -133,9 +133,9 @@ per-target combat requests derived from that geometry do not.
 
 ### D-6 — Presentation and personal effects are Player-domain
 
-Lightning, flash, fadeout, splash, motion markers, explosion smoke, materialise
-beams, dust, particles (decay and blossom), orbs, bullets, missiles, and loot are
-Player-domain.
+Lightning, flash, fadeout, splash, motion markers, explosion smoke, pulse rings,
+materialise beams, dust, particles (decay and blossom), orbs, bullets, missiles,
+and loot are Player-domain.
 They may depend on local view state and must not decide a Shared outcome.
 
 An effect keyed to a Shared entity retires with it. An install writes the world
@@ -148,12 +148,12 @@ may raise a local effect on every instance. Effects intended for one participant
 carry a cursor scope; entity zero means session-wide, while a non-zero cursor is
 admitted only by the instance that simulates it.
 
-Storm's red burst follows the same boundary. Its Shared circle component refreshes
-the nearest cursor's Shared aim coordinates on every active tick; every instance
-derives its own Player-domain bullets and muzzle from that common aim. Corrections
-therefore repair direction without putting Player-domain identity or a redundant
-target entity on the wire, and equal-distance choices use deterministic roster
-order.
+A weapon mounted on a Shared host follows the same boundary; storm's red circle is
+one, a turret the storm arms for each burst. The mount's aim is Shared state
+refreshed every tick from Shared positions, and every instance derives its own
+Player-domain shots and muzzle from that common aim, so a correction repairs
+direction without putting Player-domain identity on the wire. A hit on a cursor is
+applied by that cursor's owner alone; equal-distance aims use roster order.
 
 ### D-7 — Domain is explicit ambient context
 
@@ -192,10 +192,11 @@ rewinds a sequence. Three shapes fail that test, and each has its own remedy:
   from the tick and that pair. Soft collision is the case: one swarm member the
   producer had already killed cost the two instances a different number of draws,
   and from that tick every shared impulse read a different point in one sequence.
+  A mount's shot spread is seeded from the tick and its host for the same reason.
 - A draw a **filter** stands in front of is moved ahead of the filter instead, so
-  the count is the budget rather than the outcome. Spawn placement retries and the
-  storm's burst are that shape: they test live cursor cells, a wall set a correction
-  repairs, and an aim, and every one of those differs across the lead.
+  the count is the budget rather than the outcome. Spawn placement retries are that
+  shape: they test live cursor cells and a wall set a correction repairs, and both
+  differ across the lead.
 
 ### D-9 — Entity identity is domain-local and deterministic
 
@@ -261,7 +262,7 @@ re-derived:
 
 - energy, heat, boost, shield, weapon, and cursor combat values;
 - `CursorComponent.Control` and `PeerID`;
-- `CursorViewComponent`, `PingComponent`, and `PulseComponent` presentation.
+- `CursorViewComponent` and `PingComponent` presentation.
 
 Every one of them is excluded from what a receiver repairs for a cursor it does not
 own, and every one but `PingComponent` is also transported on the owner-state sync.
@@ -688,11 +689,9 @@ departing cursor, and reconnect must take a current world.
 
 Domain-boundary debt is named rather than merely present:
 
-- the ambient-Shared pushes of Local-class events are **pinned** by
-  `TestAmbientLocalPushesArePinned` rather than fixed: each is a shared mechanic
-  raising a per-instance effect (D-6), fixing them is thirty gameplay judgements
-  rather than one refactor, and the pin is what makes each deliberate and every new
-  one a test failure;
+- a shared system pushing a Local-class event is a per-instance effect (D-6) and is
+  not checked; the reverse, a player-domain push of a replicated event, must name its
+  crossing in `crossingPushes` or `TestEventClassMatchesSystemProfile` fails;
 - the programmatic operator surface is **closed**: `App.SetupLevel`, `App.Region`
   and `App.Reset` share one guard that reads the event's declared class;
 - splitting mixed combat telemetry so Shared results compare directly is what

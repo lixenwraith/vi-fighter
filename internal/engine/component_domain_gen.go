@@ -30,7 +30,7 @@ var componentDomains = map[uint64]componentRule{
 	GenotypeBit:     {"Genotype", core.DomainShared},
 	LightningBit:    {"Lightning", core.DomainPlayer},
 	MissileBit:      {"Missile", core.DomainPlayer},
-	PulseBit:        {"Pulse", core.DomainShared},
+	MountBit:        {"Mount", core.DomainShared},
 	TargetBit:       {"Target", core.DomainShared},
 	TargetAnchorBit: {"TargetAnchor", core.DomainShared},
 	DrainBit:        {"Drain", core.DomainPlayer},

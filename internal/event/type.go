@@ -229,6 +229,8 @@ const (
 	EventWeaponFireRequest
 	// EventFireSpecialRequest (FireSpecialRequestPayload) [local] signals player intent to fire special ability
 	EventFireSpecialRequest
+	// EventMountRequest (MountRequestPayload) [shared] puts a weapon on a Shared host
+	EventMountRequest
 
 	// --- Heat ---
 
@@ -290,6 +292,10 @@ const (
 	EventExplosionVisualRequest
 	// EventExplosionVisualBatchRequest (ExplosionVisualBatchRequestPayload) [local] presents several explosion centers for its producer
 	EventExplosionVisualBatchRequest
+	// EventPulseVisualRequest (PulseVisualRequestPayload) [local] presents one disruptor pulse ring for its producer
+	EventPulseVisualRequest
+	// EventBeamVisualRequest (BeamVisualRequestPayload) [local] presents one beam, its warning first, for its producer
+	EventBeamVisualRequest
 
 	// --- Dust ---
 

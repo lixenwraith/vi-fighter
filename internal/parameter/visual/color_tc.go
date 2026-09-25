@@ -136,26 +136,41 @@ var (
 	RgbOrbRod       = color.BrightCyan
 	RgbOrbLauncher  = color.TigerOrange
 	RgbOrbDisruptor = color.MintGreen
+	RgbOrbTurret    = color.Cornflower
+	RgbOrbBeam      = color.HotPink
 	RgbOrbFlash     = color.White
 
 	// Orb corona colors (dimmer than sigil for glow effect)
 	RgbOrbCoronaRod       = color.DimCyan
 	RgbOrbCoronaLauncher  = color.BurntOrange
 	RgbOrbCoronaDisruptor = color.SageGreen
+	RgbOrbCoronaTurret    = color.SteelBlue
+	RgbOrbCoronaBeam      = color.PaleVioletRed
 
 	// Missile: Deep Orange
 	RgbMissileChildBody       = color.TigerOrange
 	RgbMissileChildTrailStart = color.Bronze
 	RgbMissileChildTrailEnd   = color.Sienna
 
+	// Mounted launcher's missile: red
+	RgbMissileHostileBody       = color.BrightRed
+	RgbMissileHostileTrailStart = color.Brick
+	RgbMissileHostileTrailEnd   = color.Oxblood
+
 	// Missile impact explosion (warm palette)
 	RgbMissileExplosionCore = color.Ivory
 	RgbMissileExplosionMid  = color.WarmOrange
 	RgbMissileExplosionEdge = color.Rust
 
-	// Pulse effect colors (polarity-based)
+	// Pulse effect colors (polarity-based, and a mounted disruptor's)
 	RgbPulsePositive = color.Buttercream
 	RgbPulseNegative = color.Orchid
+	RgbPulseHostile  = color.Vermilion
+
+	// Beam colors (polarity-based, and a mounted beam's)
+	RgbBeamPositive = color.PaleGold
+	RgbBeamNegative = color.LightOrchid
+	RgbBeamHostile  = color.BrightRed
 
 	// Audio indicator colors
 	RgbAudioBothOff     = color.IndianRed
@@ -213,6 +228,8 @@ var (
 	RgbLootRodGlow       = color.PaleCyan
 	RgbLootLauncherGlow  = color.PaleLemon
 	RgbLootDisruptorGlow = color.PaleMint
+	RgbLootTurretGlow    = color.LightSkyBlue
+	RgbLootBeamGlow      = color.LightPink
 	RgbLootEnergyGlow    = color.HotMagenta
 	RgbLootEnergySigil   = color.LemonYellow
 	RgbLootHeatSigil     = color.Coral
@@ -224,6 +241,8 @@ var (
 	// Bullet colors
 	RgbBulletStormRed    = color.RoseRed
 	RgbBulletStormRedDim = color.DarkRust
+	RgbBulletPlayer      = color.Cornflower
+	RgbBulletPlayerDim   = color.SteelBlue
 
 	// Muzzle flash colors
 	RgbMuzzleFlashBase = color.Mango

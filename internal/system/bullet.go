@@ -12,9 +12,9 @@ import (
 	"github.com/lixenwraith/vi-fighter/pkg/vmath/physics"
 )
 
-// BulletSystem manages linear projectile lifecycle
-// Bullets travel in a straight line, collide with walls/boundaries/cursor/shield
-// Spawned via EventBulletSpawnRequest from any system
+// BulletSystem manages linear projectile lifecycle. Bullets travel in a straight
+// line and stop at walls and bounds; a hostile one strikes cursors and shields, a
+// cursor's resolves against species. Spawned via EventBulletSpawnRequest.
 type BulletSystem struct {
 	world   *engine.World
 	enabled bool
@@ -47,8 +47,7 @@ func (s *BulletSystem) Init() {
 
 func (s *BulletSystem) Name() string { return "bullet" }
 
-// Priority: define parameter.PriorityBullet, schedule after storm and before render
-func (s *BulletSystem) Priority() int { return 0 }
+func (s *BulletSystem) Priority() int { return parameter.PriorityBullet }
 
 func (s *BulletSystem) EventTypes() []event.EventType {
 	return []event.EventType{
@@ -139,8 +138,8 @@ func (s *BulletSystem) Update() {
 	s.world.DestroyEntitiesBatch(toDestroy)
 }
 
-// traverseAndCollide walks the bullet path checking for wall, boundary, shield, and cursor collisions
-// Returns true if bullet should be destroyed
+// traverseAndCollide walks the bullet path to its first wall, boundary or target;
+// returns true if the bullet should be destroyed
 func (s *BulletSystem) traverseAndCollide(
 	bullet *component.BulletComponent,
 	fromX, fromY, toX, toY float64,
@@ -167,48 +166,25 @@ func (s *BulletSystem) traverseAndCollide(
 			return true
 		}
 
-		if s.collideCursor(bullet, cx, cy) {
+		if bullet.Hostile {
+			if cursor := CursorContactAt(s.world, cx, cy); cursor != 0 {
+				strikeCursor(s.world, cursor, bullet.Damage)
+				return true
+			}
+		} else if target, hit, ok := CombatTargetAt(s.world, cx, cy, engine.ScopeBoth, 0, bullet.Owner); ok {
+			// Resolved by the target, not by the firing cursor's domain (D-10)
+			s.world.PushEventDomain(event.EventCombatAttackDirectRequest, &event.CombatAttackDirectRequestPayload{
+				AttackType:   bullet.Attack,
+				OwnerEntity:  bullet.Owner,
+				OriginEntity: bullet.Owner,
+				TargetEntity: target,
+				HitEntity:    hit,
+				HasOrigin:    true,
+				OriginX:      cx,
+				OriginY:      cy,
+			}, target.Domain())
 			return true
 		}
-	}
-
-	return false
-}
-
-// collideCursor checks shields before direct hits in deterministic roster order.
-func (s *BulletSystem) collideCursor(bullet *component.BulletComponent, x, y int) bool {
-	for i := range parameter.MaxPlayers {
-		cursor := s.world.Resources.Player.Slot(uint8(i))
-		cursorPos, ok := s.world.Positions.GetPosition(cursor)
-		if !ok {
-			continue
-		}
-		shield, ok := s.world.Components.Shield.GetComponent(cursor)
-		if !ok || !shield.Active || !vmath.EllipseContainsPointF(x, y, cursorPos.X, cursorPos.Y, shield.InvRxSq, shield.InvRySq) {
-			continue
-		}
-		s.world.PushLocal(event.EventShieldDrainRequest, &event.ShieldDrainRequestPayload{
-			Entity: cursor,
-			Value:  bullet.Damage.EnergyDrain,
-		})
-		return true
-	}
-
-	for i := range parameter.MaxPlayers {
-		cursor := s.world.Resources.Player.Slot(uint8(i))
-		cursorPos, ok := s.world.Positions.GetPosition(cursor)
-		if !ok || cursorPos.X != x || cursorPos.Y != y {
-			continue
-		}
-		shield, ok := s.world.Components.Shield.GetComponent(cursor)
-		if ok && shield.Active {
-			continue
-		}
-		s.world.PushLocal(event.EventHeatAddRequest, &event.HeatAddRequestPayload{
-			Entity: cursor,
-			Delta:  bullet.Damage.HeatDelta,
-		})
-		return true
 	}
 
 	return false
@@ -220,7 +196,9 @@ func (s *BulletSystem) spawnBullet(p *event.BulletSpawnRequestPayload) {
 	s.world.Components.Bullet.SetComponent(e, component.BulletComponent{
 		Owner:       p.Owner,
 		MaxLifetime: p.MaxLifetime,
+		Hostile:     p.Hostile,
 		Damage:      p.Damage,
+		Attack:      p.Attack,
 	})
 
 	s.world.Components.Kinetic.SetComponent(e, component.KineticComponent{

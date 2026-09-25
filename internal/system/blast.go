@@ -87,3 +87,9 @@ func strikePlayerTargets(w *engine.World, owner core.Entity, area *blastArea, at
 		})
 	}
 }
+
+// contains reports whether a cell is inside any center's blast
+func (a *blastArea) contains(x, y int) bool {
+	_, _, ok := a.find(x, y)
+	return ok
+}

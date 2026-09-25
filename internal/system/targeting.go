@@ -92,33 +92,36 @@ func targetCell(w *engine.World, e core.Entity) (int, int, bool) {
 // scope selects the enumerated domains; shared species pass ScopeShared, weapons ScopeBoth.
 // It excludes self, every cursor, cursor-owned orbs, and entities owned by ownerEntity.
 func HasCombatTargetAt(w *engine.World, x, y int, scope engine.DomainScope, selfEntity, ownerEntity core.Entity) bool {
+	_, _, ok := CombatTargetAt(w, x, y, scope, selfEntity, ownerEntity)
+	return ok
+}
+
+// CombatTargetAt is HasCombatTargetAt naming the first target found and the occupant it was hit through
+func CombatTargetAt(w *engine.World, x, y int, scope engine.DomainScope, selfEntity, ownerEntity core.Entity) (target, hit core.Entity, ok bool) {
 	var entities [parameter.MaxEntitiesPerCell]core.Entity
 	count := w.Positions.GetEntitiesAtInto(x, y, scope, entities[:])
 	for i := range count {
-		e := entities[i]
-		target, _, valid := ResolveTargetFromEntity(w, e, selfEntity)
-		if !valid {
+		target, hit, valid := ResolveTargetFromEntity(w, entities[i], selfEntity)
+		if !valid || isCursorOrOwnedOrb(w, target) || isOwnedBy(w, target, ownerEntity) {
 			continue
 		}
-		if isCursorOrOwnedOrb(w, target) {
-			continue
-		}
-		if isOwnedBy(w, target, ownerEntity) {
-			continue
-		}
-		return true
+		return target, hit, true
 	}
-	return false
+	return 0, 0, false
 }
 
-// FindTargetsInEllipse returns all combat targets with members inside the ellipse
-// Results grouped by target: one TargetGroup per composite header or single entity
-// ownerEntity-owned entities excluded
-//
-// Iterates Combat store (singles) and Member store (composites) for species-agnostic resolution.
-// Result order is store order, never map order: callers emit one event per group and
-// combat resolution consumes RNG per event.
+// FindTargetsInEllipse returns all combat targets with members inside the ellipse; see FindTargetsIn
 func FindTargetsInEllipse(w *engine.World, cx, cy int, invRxSq, invRySq float64, scope engine.DomainScope, ownerEntity core.Entity) []TargetGroup {
+	return FindTargetsIn(w, func(x, y int) bool {
+		return vmath.EllipseContainsPointF(x, y, cx, cy, invRxSq, invRySq)
+	}, scope, ownerEntity)
+}
+
+// FindTargetsIn returns all combat targets with members in the cells contains accepts,
+// grouped: one TargetGroup per composite header or single entity. ownerEntity-owned
+// entities are excluded. Order is store order, never map order: callers emit one
+// event per group and combat resolution consumes RNG per event.
+func FindTargetsIn(w *engine.World, contains func(x, y int) bool, scope engine.DomainScope, ownerEntity core.Entity) []TargetGroup {
 	index := make(map[core.Entity]int)
 	result := make([]TargetGroup, 0, 8)
 
@@ -137,7 +140,7 @@ func FindTargetsInEllipse(w *engine.World, cx, cy int, invRxSq, invRySq float64,
 			continue
 		}
 		x, y, ok := targetCell(w, e)
-		if !ok || !vmath.EllipseContainsPointF(x, y, cx, cy, invRxSq, invRySq) {
+		if !ok || !contains(x, y) {
 			continue
 		}
 		index[e] = len(result)
@@ -170,7 +173,7 @@ func FindTargetsInEllipse(w *engine.World, cx, cy int, invRxSq, invRySq float64,
 			continue
 		}
 		x, y, ok := targetCell(w, memberEntity)
-		if !ok || !vmath.EllipseContainsPointF(x, y, cx, cy, invRxSq, invRySq) {
+		if !ok || !contains(x, y) {
 			continue
 		}
 
@@ -304,6 +307,23 @@ func FindNearestTargets(w *engine.World, fromX, fromY float64, count int, scope 
 		final[i] = result[i%len(result)]
 	}
 	return final
+}
+
+// traceBeam lays a band from a cell in one of eight directions, up to maxLength steps
+// and short of the first wall that blocks kinetics or the map edge
+func traceBeam(w *engine.World, x, y, dx, dy int, maxLength float64, width int) vmath.Band {
+	band := vmath.Band{X: x, Y: y, DX: dx, DY: dy, Half: max(width-1, 0) / 2}
+	if dx == 0 && dy == 0 {
+		return band
+	}
+	for along := 1; along <= int(maxLength); along++ {
+		cx, cy := x+along*dx, y+along*dy
+		if w.Positions.IsOutOfBounds(cx, cy) || w.Positions.HasBlockingWallAt(cx, cy, component.WallBlockKinetic) {
+			break
+		}
+		band.Length = along
+	}
+	return band
 }
 
 // isOwnedBy returns true if entity is the owner or its CombatComponent,OwnerEntity matches

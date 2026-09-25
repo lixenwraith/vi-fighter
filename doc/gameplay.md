@@ -50,7 +50,7 @@ template applied to every admitted cursor, not only slot zero.
 | Heat | Bounded typing momentum; excess becomes overheat and can trigger a burst. |
 | Boost | Timed reward from correct typing or credited kills that protects ordinary energy penalties and accelerates heat gain. |
 | Shield | Elliptical defensive/collection area active whenever energy is nonzero. |
-| Weapon | Charge counts, orbiting indicators, and independent cooldowns for three weapon types. |
+| Weapon | Charge counts, orbiting indicators, and independent cooldowns per weapon kind; see [Combat and weapons](combat.md). |
 | Ping | Crosshair, selection/grid feedback, and cursor movement visuals. |
 | Combat | Player ownership/type and hit-point metadata used by the combat matrix. |
 
@@ -265,7 +265,9 @@ locally; only center/radius/attack geometry crosses for shared combat.
 | Main cleaner | Directional player attack/effect originating at the owning cursor. Each impact chains into the rod's lightning, so the energy drain and its zap span the firing cursor and the species rather than the impact cell. |
 | Rod | Direct lightning against unique nearest targets, rewarding energy in the attacker's current polarity. |
 | Launcher | Homing/area missiles assigned from the nearest-target set. |
-| Disruptor | Pulse/disruption behavior centered through its charged orb path. |
+| Disruptor | Stun pulse centred on its orb; it fires only while a target is inside the ellipse. |
+| Turret | One spread bullet per charge from its orb at the nearest targets; each hit is direct damage. |
+| Beam | A 3-cell band from its orb to the first wall, 8-way toward each of up to one target per charge; every target inside takes area damage. |
 
 Weapon ownership is represented by charge count: zero means not owned. Each
 owned type has an orbiting orb entity and a separate cooldown. The combat system
@@ -290,13 +292,13 @@ a blocked cleaner drains to its stop point.
 | Drain | Local population is `ceil(current heat × 10 / 100)`, capped at 10 and excluding overheat: heat 0 gives 0; 1–10 gives 1; 11–20 gives 2; 91–100 gives 10. Materializes, chases, drains shield energy, and removes heat on unshielded contact. |
 | Quasar | Large composite, 5 cells wide by 3 high. Tracks the cursor and emits lightning when the cursor leaves its effective range. It is created by fusing drains in the default progression. |
 | Swarm | Fast composite, 4 cells wide by 2 high, created from enraged drains. It tracks/charges, may teleport around blocked line of sight, absorbs drains, and has bounded charges/lifetime. |
-| Storm | Multi-part boss with independently moving circles and 3D orbital dynamics. The green circle pulses an area, the red circle tracks the nearest cursor with directional bullet bursts, and the blue circle creates swarm pressure. |
+| Storm | Multi-part boss with independently moving circles and 3D orbital dynamics. The green circle pulses an area, the red circle carries a turret it fires in bursts at the nearest cursor, and the blue circle creates swarm pressure. |
 | Pylon | Stationary ablative hostile structure/damage sponge that pushes nearby species. |
 | Snake | Segmented composite species with separately modeled head and body members and formation lifecycle. |
 | Eye | Five-by-three composite navigation attacker. It belongs to a target group, homes along routes, and self-destructs on contact; its parameters are evolution-managed. |
 | Tower | Player-owned stationary ablative structure. It blocks cursor placement and acts as a target in tower-defense scenarios. |
 | Gateway | Timed anchored spawner. It emits eye or snake spawn requests with route/adaptation metadata and disappears when its anchor is gone. |
-| Bullet | Straight projectile with bounds, wall, shield, and cursor collision handling. |
+| Bullet | Straight projectile stopped by bounds and walls; a mounted turret's strikes cursors and shields, a cursor's strikes species. |
 
 The component `SpeciesType` catalog includes drain, swarm, quasar, storm,
 pylon, snake, eye, and tower. Gateway and bullet are mechanics/entities but are
@@ -383,7 +385,7 @@ declares for itself:
 | Typing/world | `typing`, `composite`, `wall`, `tower`, `gateway`, `loot`, `glyph`, `nugget`, `particle`, `gold` |
 | Spawning/effects | `materialize`, `cleaner`, `fuse`, `spirit`, `lightning`, `missile` |
 | Motion/environment/combat | `navigation`, `soft_collision`, `environment`, `combat` |
-| Species | `drain`, `quasar`, `swarm`, `storm`, `pylon`, `snake`, `eye`, `bullet` |
+| Species | `drain`, `quasar`, `swarm`, `storm`, `pylon`, `snake`, `eye`, `mount`, `bullet` |
 | Particles | `dust`, `flash`, `fadeout`, `marker`, `explosion`, `motion_marker`, `splash` |
 | Lifecycle/learning | `death`, `timer`, `adaptation`, `genetic` |
 | Sound | `audio`, `music` |

@@ -45,13 +45,13 @@ var DropTables = map[SpeciesType]SpeciesDropTable{
 	},
 	SpeciesStorm: {
 		Tiers: []DropTier{
-			{Unique: true, Entries: []DropEntry{{LootDisruptor, 1.0, 1, 2}}},
+			{Unique: true, Entries: []DropEntry{{LootDisruptor, 1.0, 1, 2}, {LootTurret, 1.0, 1, 0}}},
 			{Unique: false, Entries: []DropEntry{{LootEnergy, 1.0, 3, 0}}},
 		},
 	},
 	SpeciesSnake: {
 		Tiers: []DropTier{
-			{Unique: true, Entries: []DropEntry{{LootDisruptor, 1.0, 1, 2}}},
+			{Unique: true, Entries: []DropEntry{{LootDisruptor, 1.0, 1, 2}, {LootBeam, 1.0, 1, 0}}},
 			{Unique: false, Entries: []DropEntry{{LootEnergy, 1.0, 3, 0}}},
 		},
 	},
@@ -73,7 +73,8 @@ const (
 	LootDisruptor
 	LootHeat
 	LootEnergy
-	// Future loot types here
+	LootTurret
+	LootBeam
 	LootCount // Sentinel for array sizing
 )
 
@@ -132,6 +133,16 @@ var (
 		WeaponType: WeaponDisruptor,
 	}
 
+	rewardTurret = RewardProfile{
+		Type:       RewardWeapon,
+		WeaponType: WeaponTurret,
+	}
+
+	rewardBeam = RewardProfile{
+		Type:       RewardWeapon,
+		WeaponType: WeaponBeam,
+	}
+
 	rewardHeat = RewardProfile{
 		Type:  RewardHeat,
 		Delta: parameter.LootHeatRewardValue,
@@ -150,4 +161,6 @@ var LootProfiles = [LootCount]LootProfile{
 	LootDisruptor: {Reward: &rewardDisruptor},
 	LootHeat:      {Reward: &rewardHeat},
 	LootEnergy:    {Reward: &rewardEnergy},
+	LootTurret:    {Reward: &rewardTurret},
+	LootBeam:      {Reward: &rewardBeam},
 }

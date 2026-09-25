@@ -57,17 +57,25 @@ var SpiritBaseOffsets = [8]int{
 const (
 	Missile256Trail           = ConYellow
 	Missile256Base            = ConBrightYellow
+	Missile256HostileTrail    = ConRed
+	Missile256HostileBase     = ConBrightRed
 	SwarmChargeLine256Palette = ConMagenta
 	// Loot256Rim is the magenta the Linux console showed its rose rim as, which reads well
 	Loot256Rim        = ConBrightMagenta
 	Quasar256Rim      = ConWhite
 	Bullet256StormRed = ConBrightRed
+	Bullet256Player   = ConBrightBlue
 )
 
 // Effects the console cannot blend, drawn solid where TrueColor's blend is strong enough to show
 const (
 	Pulse256Positive  = ConBrightYellow
 	Pulse256Negative  = ConBrightMagenta
+	Pulse256Hostile   = ConRed
+	Beam256Positive   = ConBrightYellow
+	Beam256Negative   = ConBrightMagenta
+	Beam256Hostile    = ConBrightRed
+	Beam256Warning    = ConRed // every palette's warning line: a warning reads as one colour
 	QuasarZap256Idle  = ConCyan
 	QuasarZap256Armed = ConRed
 	// Storm256Ring marks the near storm sphere, the one that can be hit

@@ -59,18 +59,18 @@ const (
 	WeaponCooldownRod       = 500 * time.Millisecond
 	WeaponCooldownLauncher  = 1000 * time.Millisecond
 	WeaponCooldownDisruptor = 2000 * time.Millisecond
+	WeaponCooldownTurret    = 500 * time.Millisecond
+	WeaponCooldownBeam      = 1500 * time.Millisecond
 )
 
-// Weapon Max Charges — component owns Charges storage, parameter owns the cap table
-// (component already imports parameter; parameter importing component would cycle)
-// Indexed by component.WeaponType ordinal: Rod=0, Launcher=1, Disruptor=2
+// Weapon Max Charges, read through component.WeaponSpecs
 const (
 	WeaponMaxChargeRod       = 10
 	WeaponMaxChargeLauncher  = 10
 	WeaponMaxChargeDisruptor = 1
+	WeaponMaxChargeTurret    = 5
+	WeaponMaxChargeBeam      = 3
 )
-
-var WeaponMaxCharges = [3]int{WeaponMaxChargeRod, WeaponMaxChargeLauncher, WeaponMaxChargeDisruptor}
 
 // Weapon Orb Configuration
 const (
