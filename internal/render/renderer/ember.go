@@ -32,9 +32,13 @@ type emberRingState struct {
 // emberCellFunc renders a single cell within the ember ellipse
 type emberCellFunc func(p *EmberPainter, buf *render.RenderBuffer, screenX, screenY int, normDistSq, dx, dy float64)
 
+// emberFrameFunc prepares the colour state one Paint needs, rebuilding heat caches when heat changed
+type emberFrameFunc func(p *EmberPainter, ctx render.RenderContext, heatChanged bool)
+
 // EmberPainter handles per-cell rendering with color mode dispatch
 type EmberPainter struct {
-	renderCell emberCellFunc
+	renderCell   emberCellFunc
+	prepareFrame emberFrameFunc
 
 	// Per-Paint state
 	params     visual.EmberParams
@@ -53,13 +57,10 @@ type EmberPainter struct {
 	ringInvWidthSq   float64
 
 	// Caching and Precalculation States
-	lastHeat         int
-	colorLUT         [256]emberLayerColors
-	invRadiiSqLUT    [256]struct{ invRxSq, invRySq float64 }
-	trueColor        bool
-	palette256       uint8
-	peerPalette256   uint8
-	renderPalette256 uint8
+	lastHeat      int
+	colorLUT      [256]emberLayerColors
+	invRadiiSqLUT [256]struct{ invRxSq, invRySq float64 }
+	palette256    uint8
 }
 
 // EmberRenderer renders ember effect for entities with active ember state
@@ -155,15 +156,14 @@ func interpolateEmberColors(t float64) emberColors {
 // NewEmberPainter creates a painter for the specified color mode
 func NewEmberPainter(colorMode terminal.ColorMode) *EmberPainter {
 	p := &EmberPainter{
-		radiusX:   visual.EmberRadiusX,
-		radiusY:   visual.EmberRadiusY,
-		lastHeat:  -1, // Force cache rebuild on first frame
-		trueColor: colorMode != terminal.ColorMode256,
+		radiusX:  visual.EmberRadiusX,
+		radiusY:  visual.EmberRadiusY,
+		lastHeat: -1, // Force cache rebuild on first frame
 	}
 	if colorMode == terminal.ColorMode256 {
-		p.renderCell = emberCell256
+		p.renderCell, p.prepareFrame = emberCell256, emberFrame256
 	} else {
-		p.renderCell = emberCellTrueColor
+		p.renderCell, p.prepareFrame = emberCellTrueColor, emberFrameTrueColor
 	}
 	return p
 }
@@ -176,51 +176,12 @@ func (p *EmberPainter) Paint(buf *render.RenderBuffer, ctx render.RenderContext,
 	p.blendScale = blendScale
 	p.gameTime = float64(ctx.GameTime.UnixNano()) / 1e9
 
-	// 1D Cache Rebuild: Only on heat change
-	if heat != p.lastHeat {
+	heatChanged := heat != p.lastHeat
+	if heatChanged {
 		p.lastHeat = heat
 		p.params = visual.InterpolateEmberParams(heat)
-		if p.trueColor {
-			p.colors = interpolateEmberColors(p.params.HeatFactor)
-			p.buildColorLUT()
-		} else {
-			paletteHeat := min(max(100-int(p.params.RingAlpha*200.0), 0), 100)
-			p.palette256 = visual.Ember256PaletteIndex(paletteHeat)
-			dimColor := color.Screen(visual.RgbBackground, render.HeatGradientLUT[paletteHeat*255/100], visual.PeerFieldBlend)
-			p.peerPalette256 = color.RGBTo256(dimColor)
-		}
 	}
-
-	if p.trueColor {
-		// Cache geometric reciprocals once per frame.
-		if p.params.RingWidth > 0 {
-			p.ringInvWidthSq = 1.0 / (p.params.RingWidth * p.params.RingWidth)
-		} else {
-			p.ringInvWidthSq = 0
-		}
-
-		p.ringAlpha = p.params.RingAlpha
-		if p.params.RingVisible > 0 {
-			p.ringVisibleInvSq = 1.0 / (p.params.RingVisible * p.params.RingVisible)
-		} else {
-			p.ringVisibleInvSq = 0
-		}
-
-		// Compute ring rotation and pulse state once per frame.
-		for i := range visual.EmberRingCount {
-			effectiveSpeed := p.params.RingSpeed * visual.EmberRingVelocities[i]
-			angle := vmath.NormalizeAngleF(p.gameTime*effectiveSpeed + visual.EmberRingPhaseOffsets[i])
-
-			p.ringStates[i].cosA = vmath.CosF(angle)
-			p.ringStates[i].sinA = vmath.SinF(angle)
-			p.ringStates[i].pulseAlpha = p.ringAlpha + visual.PulseAmplitude*vmath.SinF(p.gameTime*visual.PulseFrequency+visual.EmberRingPulsePhases[i])
-		}
-	} else {
-		p.renderPalette256 = p.palette256
-		if blendScale < 1 {
-			p.renderPalette256 = p.peerPalette256
-		}
-	}
+	p.prepareFrame(p, ctx, heatChanged)
 
 	// Precalculate jagged radii and ellipse reciprocals for the frame.
 	timePhase := p.gameTime * p.params.JaggedSpeed
@@ -275,6 +236,48 @@ func (p *EmberPainter) Paint(buf *render.RenderBuffer, ctx render.RenderContext,
 			p.renderCell(p, buf, screenX, screenY, normDistSq, dx, dy)
 		}
 	}
+}
+
+// emberFrameTrueColor rebuilds the layer LUT on heat change and advances the rings
+func emberFrameTrueColor(p *EmberPainter, _ render.RenderContext, heatChanged bool) {
+	if heatChanged {
+		p.colors = interpolateEmberColors(p.params.HeatFactor)
+		p.buildColorLUT()
+	}
+
+	// Cache geometric reciprocals once per frame.
+	if p.params.RingWidth > 0 {
+		p.ringInvWidthSq = 1.0 / (p.params.RingWidth * p.params.RingWidth)
+	} else {
+		p.ringInvWidthSq = 0
+	}
+
+	p.ringAlpha = p.params.RingAlpha
+	if p.params.RingVisible > 0 {
+		p.ringVisibleInvSq = 1.0 / (p.params.RingVisible * p.params.RingVisible)
+	} else {
+		p.ringVisibleInvSq = 0
+	}
+
+	// Compute ring rotation and pulse state once per frame.
+	for i := range visual.EmberRingCount {
+		effectiveSpeed := p.params.RingSpeed * visual.EmberRingVelocities[i]
+		angle := vmath.NormalizeAngleF(p.gameTime*effectiveSpeed + visual.EmberRingPhaseOffsets[i])
+
+		p.ringStates[i].cosA = vmath.CosF(angle)
+		p.ringStates[i].sinA = vmath.SinF(angle)
+		p.ringStates[i].pulseAlpha = p.ringAlpha + visual.PulseAmplitude*vmath.SinF(p.gameTime*visual.PulseFrequency+visual.EmberRingPulsePhases[i])
+	}
+}
+
+// emberFrame256 takes the heat bar's leading colour; a peer's heat gradient colour is dimmed like its shield
+func emberFrame256(p *EmberPainter, ctx render.RenderContext, _ bool) {
+	if p.blendScale >= 1 {
+		p.palette256 = heatLead256(p.lastHeat, ctx.ScreenWidth)
+		return
+	}
+	lead := render.HeatGradientLUT[min(max(p.lastHeat, 0), 100)*255/100]
+	p.palette256 = color.RGBTo256(color.Screen(visual.RgbBackground, lead, p.blendScale))
 }
 
 // buildColorLUT populates the 1D color/power map array (invoked on heat change)
@@ -405,7 +408,7 @@ func emberCell256(p *EmberPainter, buf *render.RenderBuffer, screenX, screenY in
 		return
 	}
 
-	buf.SetBg256(screenX, screenY, p.renderPalette256)
+	buf.SetBg256(screenX, screenY, p.palette256)
 }
 
 // powApprox approximates x^n without a per-cell transcendental call.

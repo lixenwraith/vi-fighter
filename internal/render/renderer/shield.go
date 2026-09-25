@@ -30,24 +30,29 @@ type ShieldStyle struct {
 // shieldCellFunc renders a single cell within the shield ellipse
 type shieldCellFunc func(p *ShieldPainter, buf *render.RenderBuffer, screenX, screenY int, normalizedDistSq float64)
 
+// shieldFrameFunc prepares the colour state one Paint needs
+type shieldFrameFunc func(p *ShieldPainter)
+
 // ShieldPainter is a reusable shield halo renderer
 type ShieldPainter struct {
-	renderCell shieldCellFunc
+	renderCell   shieldCellFunc
+	prepareFrame shieldFrameFunc
 
 	// Per-Paint transient state
 	style            ShieldStyle
 	glowActive       bool
 	rotDirX, rotDirY float64
 	cellDx, cellDy   float64
+	rim256, glow256  uint8
 }
 
 // NewShieldPainter creates a painter dispatching to the appropriate color mode
 func NewShieldPainter(colorMode terminal.ColorMode) *ShieldPainter {
 	p := &ShieldPainter{}
 	if colorMode == terminal.ColorMode256 {
-		p.renderCell = shieldCell256
+		p.renderCell, p.prepareFrame = shieldCell256, shieldFrame256
 	} else {
-		p.renderCell = shieldCellTrueColor
+		p.renderCell, p.prepareFrame = shieldCellTrueColor, shieldFrameTrueColor
 	}
 	return p
 }
@@ -66,6 +71,7 @@ func (p *ShieldPainter) Paint(buf *render.RenderBuffer, ctx render.RenderContext
 		p.rotDirX = vmath.CosF(angle)
 		p.rotDirY = vmath.SinF(angle)
 	}
+	p.prepareFrame(p)
 
 	// Bounding box uses visual radius from config (includes feather zone)
 	mapStartX := max(0, centerX-cfg.VisualRadiusXInt)
@@ -96,6 +102,17 @@ func (p *ShieldPainter) Paint(buf *render.RenderBuffer, ctx render.RenderContext
 			p.cellDy = dy
 			p.renderCell(p, buf, screenX, screenY, normalizedDistSq)
 		}
+	}
+}
+
+func shieldFrameTrueColor(*ShieldPainter) {}
+
+// shieldFrame256 resolves the rim and glow palettes, dimming a peer's the way TrueColor scales its blend
+func shieldFrame256(p *ShieldPainter) {
+	p.rim256, p.glow256 = p.style.Palette256, color.RGBTo256(p.style.GlowColor)
+	if scale := float64(p.style.BlendScale); scale < 1 {
+		p.rim256 = color.RGBTo256(color.Screen(visual.RgbBackground, p.style.Color, scale))
+		p.glow256 = color.RGBTo256(color.Screen(visual.RgbBackground, p.style.GlowColor, scale))
 	}
 }
 
@@ -154,12 +171,20 @@ func shieldCellTrueColor(p *ShieldPainter, buf *render.RenderBuffer, screenX, sc
 	buf.Set(screenX, screenY, 0, visual.RgbBlack, p.style.GlowColor, render.BlendSoftLight, intensity, terminal.AttrNone)
 }
 
-// shieldCell256 renders discrete rim for 256-color terminals
+// shieldCell256 renders a solid rim band, lit in the glow colour where it faces the rotating glow
 func shieldCell256(p *ShieldPainter, buf *render.RenderBuffer, screenX, screenY int, normalizedDistSq float64) {
-	if normalizedDistSq < visual.Shield256Threshold {
+	cfg := p.style.Config
+	if normalizedDistSq < cfg.Rim256Min || normalizedDistSq > cfg.Rim256Max {
 		return
 	}
-	buf.SetBg256(screenX, screenY, p.style.Palette256)
+	palette := p.rim256
+	if p.glowActive {
+		cellDirX, cellDirY := vmath.Normalize2DF(p.cellDx, p.cellDy)
+		if vmath.DotProductF(cellDirX, cellDirY, p.rotDirX, p.rotDirY) >= visual.Shield256GlowDot {
+			palette = p.glow256
+		}
+	}
+	buf.SetBg256(screenX, screenY, palette)
 }
 
 // --- Cursor Shield Renderer ---
@@ -276,9 +301,6 @@ func (r *ShieldRenderer) renderShield(ctx render.RenderContext, buf *render.Rend
 
 	if shieldComp.Type == component.ShieldTypePlayer && !local {
 		style.BlendScale = visual.PeerFieldBlend
-		if r.gameCtx.World.Resources.Config.ColorMode == terminal.ColorMode256 {
-			style.Palette256 = color.RGBTo256(color.Screen(visual.RgbBackground, style.Color, visual.PeerFieldBlend))
-		}
 	}
 
 	r.painter.Paint(buf, ctx, shieldPos.X, shieldPos.Y, style)
