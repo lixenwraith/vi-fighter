@@ -100,38 +100,25 @@ Distribution-specific detail lives in [Packaging](packaging.md).
 ### Promote a nightly build to the first stable release
 
 - Priority: P0
-- Affected files: `.github/workflows/nightly.yml`, release artifacts and
-  `doc/packaging.md`
+- Affected files: `doc/packaging.md`, `README.md`
 - Prerequisite: choose a nightly commit after the complete verification gate
   passes
 
-Promote the selected commit to `v0.1.0` and publish a byte-stable source tarball
-with its checksum. Keep the moving nightly prerelease and headless GHCR image as
-development artifacts rather than treating them as the stable source archive.
+Tag the selected commit `v0.1.0` and publish the draft release the tag creates,
+which already carries the source archive and its checksum; then drop the "no final
+release" lines in `README.md` and [Packaging](packaging.md) §2.
 
-### Install a manual page
+### Finish the rename to vif
 
 - Priority: P1
-- Affected files: `cmd/vif/usage.go`, `doc/vif.1`, `Makefile`
-- Prerequisite: keep the flag table as the source of truth
+- Affected files: `go.mod` and every import, `deploy/k3s/`, `deploy/docker/Dockerfile`,
+  `tool/vif-allocator/model.go`, the image scripts
+- Prerequisite: the GitHub repository renamed to `vif`
 
-Generate `vif.1` from the flag table and install it through `make install`.
-
-### Add a desktop launcher
-
-- Priority: P2
-- Affected files: packaging assets and `Makefile`
-- Prerequisite: select an installable icon
-
-Add a `.desktop` entry with `Terminal=true` and install its icon.
-
-### Add shell completion
-
-- Priority: P2
-- Affected files: `cmd/vif/usage.go`, completion assets, `Makefile`
-- Prerequisite: choose generated or maintained completion definitions
-
-Provide shell completion for `vif` and install it in the appropriate data path.
+The shipped name is vif; two identities still say vi-fighter. The module path,
+repository URLs and GHCR image follow the GitHub rename. The fleet's
+`app.kubernetes.io` labels and node image name select live sessions and images, so
+renaming them wants a deploy with no session running and the old images removed.
 
 ### Publish a development AUR package
 
@@ -139,17 +126,7 @@ Provide shell completion for `vif` and install it in the appropriate data path.
 - Affected files: AUR packaging metadata and `doc/packaging.md`
 - Prerequisite: establish the release-package metadata first
 
-Publish `vi-fighter-git` alongside the release-based AUR package.
-
-### Let the whole tree build headless
-
-- Priority: P3
-- Affected files: `cmd/soundlab`
-
-`go build -tags=vif_headless ./...` fails: `cmd/soundlab` is fourteen untagged
-files over `parameter.BuiltinSounds`, which the tag removes. The gates and
-`script/test.sh deploy` therefore build `./cmd/vif` alone, as the image does, so a
-break confined to soundlab is invisible. Tag the package out, or give it a stub.
+Publish `vif-git` alongside the release-based AUR package.
 
 ### Let a request name the map size
 

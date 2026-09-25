@@ -1,6 +1,6 @@
 # External Filesystem Layout
 
-Vi-Fighter treats external files as user-owned overrides of an executable that
+vif treats external files as user-owned overrides of an executable that
 remains self-contained. Native builds discover one categorized configuration
 tree and write runtime output to the platform user-state tree. Browser builds
 skip host discovery and use embedded assets.
@@ -35,12 +35,16 @@ contain the same optional regions.
 
 ## 2. Installed configuration tree
 
-On Linux and FreeBSD the user root is `$XDG_CONFIG_HOME/vi-fighter` (normally
-`~/.config/vi-fighter`); a distribution package installs the same tree under
-`/etc/xdg/vi-fighter`, which is the `XDG_CONFIG_DIRS` default.
+The user root is Go's `os.UserConfigDir` plus `vif`:
+`$XDG_CONFIG_HOME/vif` (normally `~/.config/vif`) on Linux and
+FreeBSD, `%AppData%\vif` on Windows, `~/Library/Application Support/vif`
+on macOS. `make install-config` writes that same root. A distribution package
+installs the tree under `/etc/xdg/vif`, the `XDG_CONFIG_DIRS` default, or on
+FreeBSD under `/usr/local/etc/xdg/vif`; system roots exist on Unix-like targets
+only.
 
 ```text
-vi-fighter/
+vif/
 ├── scenario/    named scenarios, each rooted at scenario.toml
 │   ├── main/    discovered default
 │   ├── blank/   authoring scaffold
@@ -66,7 +70,8 @@ resource walks the same roots in order:
 
 1. `-config-dir <root>`;
 2. the user configuration root;
-3. each root in `$XDG_CONFIG_DIRS` (default `/etc/xdg`).
+3. each root in `$XDG_CONFIG_DIRS`; unset, that is `/etc/xdg`, and on FreeBSD
+   `/usr/local/etc/xdg` then `/etc/xdg`, because ports install under `/usr/local`.
 
 The first root holding the categorized path wins, so an older user layout still
 overrides a newer system installation. A resource absent from every root uses
@@ -126,8 +131,8 @@ the streams separate:
 
 | Output | Default | Override |
 |---|---|---|
-| Session logs, snapshots, recorder files, runtime stderr capture | `$XDG_STATE_HOME/vi-fighter/log/` | `-l=DIR` |
-| Replay journals | `$XDG_STATE_HOME/vi-fighter/journal/` | `-j=DIR` |
+| Session logs, snapshots, recorder files, runtime stderr capture | `$XDG_STATE_HOME/vif/log/` | `-l=DIR` |
+| Replay journals | `$XDG_STATE_HOME/vif/journal/` | `-j=DIR` |
 
 On platforms without an XDG state root, the platform user-cache directory is
 used. Only when no user location can be resolved does either stream fall back to

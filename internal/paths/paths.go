@@ -1,4 +1,4 @@
-// Package paths defines Vi-Fighter's external filesystem layout. It owns
+// Package paths defines vif's external filesystem layout. It owns
 // platform discovery only; callers decide which resource names are required.
 package paths
 
@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	AppDirName = "vi-fighter"
+	AppDirName = "vif"
 
 	ScenarioDirName  = "scenario"
 	MainScenarioName = "main"
@@ -165,6 +165,10 @@ func systemConfigBases() []string {
 	spec := os.Getenv("XDG_CONFIG_DIRS")
 	if spec == "" {
 		spec = "/etc/xdg"
+		if runtime.GOOS == "freebsd" {
+			// Ports install under /usr/local, which the XDG default does not name.
+			spec = "/usr/local/etc/xdg:/etc/xdg"
+		}
 	}
 
 	var out []string

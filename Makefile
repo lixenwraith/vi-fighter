@@ -12,15 +12,24 @@ IMAGE_TAG ?= dev
 IMAGE_REVISION_DEFAULT != git rev-parse HEAD 2>/dev/null || echo unknown
 IMAGE_REVISION ?= $(IMAGE_REVISION_DEFAULT)
 IMAGE_VERSION ?= $(IMAGE_TAG)
-VIF_CONFIG_BASE != test -n "$(XDG_CONFIG_HOME)" && echo "$(XDG_CONFIG_HOME)" || echo "$(HOME)/.config"
-VIF_CONFIG_DIR ?= $(VIF_CONFIG_BASE)/vi-fighter
+# The user root the binary reads is Go's os.UserConfigDir, so this mirrors it.
+VIF_CONFIG_BASE != case "$$(uname -s)" in \
+	*_NT*) cygpath -u '$(APPDATA)' ;; \
+	Darwin) echo "$(HOME)/Library/Application Support" ;; \
+	*) test -n "$(XDG_CONFIG_HOME)" && echo "$(XDG_CONFIG_HOME)" || echo "$(HOME)/.config" ;; \
+	esac
+VIF_CONFIG_DIR ?= $(VIF_CONFIG_BASE)/vif
 VIF_CONFIG_FORCE ?= 0
 WAD_DIR := wad
-WAD_ARCHIVE ?= $(BIN_DIR)/vi-fighter-wad.tar.gz
+PKG_DIR := deploy/package
+WAD_ARCHIVE ?= $(BIN_DIR)/vif-wad.tar.gz
 KEYMAP_SRC := internal/asset/input/keymap.toml
 DESTDIR ?=
-PREFIX ?= /usr
-SYSCONFDIR ?= /etc
+# FreeBSD keeps everything outside the base system under /usr/local.
+PREFIX_DEFAULT != uname -s | grep -q FreeBSD && echo /usr/local || echo /usr
+PREFIX ?= $(PREFIX_DEFAULT)
+SYSCONFDIR_DEFAULT != uname -s | grep -q FreeBSD && echo /usr/local/etc || echo /etc
+SYSCONFDIR ?= $(SYSCONFDIR_DEFAULT)
 # FreeBSD packages each Go release under its own name: go.mod's 1.27 is go127.
 GO_DEFAULT != uname -s | grep -q FreeBSD && sed -n 's/^go \([0-9]*\)\.\([0-9]*\).*/go\1\2/p' go.mod 2>/dev/null | grep . || echo go
 GO ?= $(GO_DEFAULT)
@@ -43,7 +52,7 @@ help:
 	@echo "  allocator Build the website-to-K3s session allocator"
 	@echo "  serve    Build wasm and http-server, then serve web/ directory (use PORT=8080 to change)"
 	@echo "  run      Build (dev) and run the game"
-	@echo "  install  Stage binary, wad and docs under DESTDIR/PREFIX for a distro package"
+	@echo "  install  Stage binary, wad, manual, launcher, completion and docs under DESTDIR/PREFIX"
 	@echo "  install-config Install the wad and default keymap under $(VIF_CONFIG_DIR)"
 	@echo "  install-config-force Replace files previously installed there"
 	@echo "  wad-archive Pack the wad as the config root a player extracts ($(WAD_ARCHIVE))"
@@ -133,12 +142,12 @@ test: generate
 verify: generate test
 	$(GO) build ./...
 	$(GO) build -tags novlog ./...
-	$(GO) build -tags vif_noaudio $(SRC)
-	$(GO) build -tags vif_headless $(SRC)
+	$(GO) build -tags vif_noaudio ./...
+	$(GO) build -tags vif_headless ./...
 	$(GO) test -tags vif_noaudio ./internal/... $(SRC)
 	$(GO) test -tags vif_headless ./internal/manifest ./internal/system $(SRC)
-	GOOS=js GOARCH=wasm $(GO) build $(SRC)
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -tags "novlog vif_noaudio" $(SRC)
+	GOOS=js GOARCH=wasm $(GO) build ./...
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -tags "novlog vif_noaudio" ./...
 	@if $(GO) list -deps -tags vif_headless $(SRC) | grep -Eq '/internal/render($$|/)|/pkg/audio$$'; then \
 		echo "FAIL: vif_headless imports presentation or audio implementation"; exit 1; \
 	fi
@@ -160,7 +169,8 @@ install-config:
 		if [ -e "$$2" ] && [ "$$force" != 1 ]; then \
 			echo "keep    $$2"; \
 		else \
-			install -D -m 0644 "$$1" "$$2"; \
+			install -d -m 0755 "$${2%/*}"; \
+			install -m 0644 "$$1" "$$2"; \
 			echo "install $$2"; \
 		fi; \
 	}; \
@@ -169,7 +179,7 @@ install-config:
 	install -d -m 0755 "$$root/audio"
 
 install-config-force:
-	@$(MAKE) --no-print-directory install-config VIF_CONFIG_FORCE=1
+	@$(MAKE) -s install-config VIF_CONFIG_FORCE=1
 
 # wad-archive is that same install as one file, so what a player extracts over a
 # config root is what install-config would have written there. The release
@@ -178,28 +188,31 @@ wad-archive: $(BIN_DIR)
 	@set -eu; \
 	stage=$$(mktemp -d); \
 	trap 'rm -rf "$$stage"' EXIT; \
-	$(MAKE) --no-print-directory install-config \
-		VIF_CONFIG_DIR="$$stage" VIF_CONFIG_FORCE=1 >/dev/null; \
+	$(MAKE) -s install-config VIF_CONFIG_DIR="$$stage" VIF_CONFIG_FORCE=1 >/dev/null; \
 	install -m 0644 LICENSE "$$stage/LICENSE"; \
 	tar -C "$$stage" -czf $(WAD_ARCHIVE) .; \
 	echo "packed $(WAD_ARCHIVE)"
 
 # install stages a distro package: the binary, the wad as a system config root
 # ($(SYSCONFDIR)/xdg is the XDG_CONFIG_DIRS default the resolver already
-# searches), the licence, and the documentation. Build first; nothing here
-# compiles, so a packager controls the build flags.
+# searches), the licence, the manual, the desktop entry and icons, shell completion,
+# and the documentation. Build first; nothing here compiles, so a packager controls
+# the build flags.
 install:
-	install -D -m 0755 $(BIN_DIR)/$(BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
+	@$(MAKE) -s install-config VIF_CONFIG_DIR='$(DESTDIR)$(SYSCONFDIR)/xdg/vif' VIF_CONFIG_FORCE=1
 	@set -eu; \
-	root='$(DESTDIR)$(SYSCONFDIR)/xdg/vi-fighter'; \
-	for src in $$(find $(WAD_DIR) -type f); do \
-		install -D -m 0644 "$$src" "$$root/$${src#$(WAD_DIR)/}"; \
-	done; \
-	install -D -m 0644 $(KEYMAP_SRC) "$$root/input/keymap.toml"
-	install -D -m 0644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/vi-fighter/LICENSE
-	@set -eu; \
+	put() { install -d -m 0755 "$${3%/*}"; install -m "$$1" "$$2" "$$3"; echo "install $$3"; }; \
+	put 0755 $(BIN_DIR)/$(BINARY) '$(DESTDIR)$(PREFIX)/bin/$(BINARY)'; \
+	put 0644 LICENSE '$(DESTDIR)$(PREFIX)/share/licenses/vif/LICENSE'; \
+	put 0644 doc/vif.6 '$(DESTDIR)$(PREFIX)/share/man/man6/vif.6'; \
+	put 0644 $(PKG_DIR)/vif.desktop '$(DESTDIR)$(PREFIX)/share/applications/vif.desktop'; \
+	put 0644 $(PKG_DIR)/vif.svg '$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/vif.svg'; \
+	put 0644 $(PKG_DIR)/vif-symbolic.svg '$(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/vif-symbolic.svg'; \
+	put 0644 $(PKG_DIR)/vif.bash '$(DESTDIR)$(PREFIX)/share/bash-completion/completions/vif'; \
+	put 0644 $(PKG_DIR)/_vif '$(DESTDIR)$(PREFIX)/share/zsh/site-functions/_vif'; \
+	put 0644 $(PKG_DIR)/vif.fish '$(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/vif.fish'; \
 	for src in README.md doc/*.md; do \
-		install -D -m 0644 "$$src" "$(DESTDIR)$(PREFIX)/share/doc/vi-fighter/$${src#doc/}"; \
+		put 0644 "$$src" "$(DESTDIR)$(PREFIX)/share/doc/vif/$${src#doc/}"; \
 	done
 
 # image builds the deployment artifact from the repository root, which is the

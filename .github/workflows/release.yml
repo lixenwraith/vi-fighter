@@ -1,12 +1,16 @@
-name: Nightly Release
+name: Release
 
+# The schedule moves the nightly prerelease; a v* tag drafts a stable release that
+# a person publishes. Both build the same archives.
 on:
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
+  push:
+    tags: ['v*']
 
 concurrency:
-  group: nightly-release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -36,14 +40,20 @@ jobs:
         run: go mod download
 
       - name: Refresh generated registries
-        run: go generate ./internal/event ./internal/manifest
+        shell: bash
+        run: |
+          go generate ./internal/event ./internal/manifest
+          # A release's binaries must be what its source archive builds.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then git diff --exit-code; fi
 
       - name: Build archives
         shell: bash
         run: |
           set -euo pipefail
+          label=nightly
+          if [ "$GITHUB_REF_TYPE" = tag ]; then label=${GITHUB_REF_NAME#v}; fi
           mkdir -p dist stage/linux-amd64 stage/linux-amd64-headless \
-            stage/freebsd-amd64 stage/web
+            stage/freebsd-amd64 stage/windows-amd64 stage/web
 
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -trimpath -ldflags='-s -w' -o stage/linux-amd64/vif ./cmd/vif
@@ -52,34 +62,48 @@ jobs:
             -o stage/linux-amd64-headless/vif ./cmd/vif
           CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 \
             go build -trimpath -ldflags='-s -w' -o stage/freebsd-amd64/vif ./cmd/vif
+          # Experimental and untested, with make windows's tags.
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -trimpath -tags='novlog vif_noaudio' -ldflags='-s -w' \
+            -o stage/windows-amd64/vif.exe ./cmd/vif
           GOOS=js GOARCH=wasm \
             go build -trimpath -tags=vif_noaudio -ldflags='-s -w' \
             -o stage/web/vif.wasm ./cmd/vif
 
           for target in linux-amd64 linux-amd64-headless freebsd-amd64; do
             cp README.md LICENSE "stage/$target/"
-            tar -C "stage/$target" -czf "dist/vi-fighter-nightly-$target.tar.gz" .
+            tar -C "stage/$target" -czf "dist/vif-$label-$target.tar.gz" .
           done
+          cp README.md LICENSE stage/windows-amd64/
+          (cd stage/windows-amd64 && zip -qX "../../dist/vif-$label-windows-amd64.zip" vif.exe README.md LICENSE)
           cp -R web/. stage/web/
-          tar -C stage/web -czf dist/vi-fighter-nightly-web.tar.gz .
+          tar -C stage/web -czf "dist/vif-$label-web.tar.gz" .
 
           # One archive rather than a copy in each target's: the wad is the same
           # bytes on every platform. The Makefile owns what is in it, so the
           # release and make install-config cannot drift.
-          make wad-archive WAD_ARCHIVE=dist/vi-fighter-nightly-wad.tar.gz
+          make wad-archive WAD_ARCHIVE="dist/vif-$label-wad.tar.gz"
 
-          (cd dist && sha256sum vi-fighter-nightly-* > SHA256SUMS)
+          # The source archive distributions build from. It is uploaded once, so
+          # its bytes and checksum never change the way GitHub's generated ones may.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            git archive --format=tar.gz --prefix="vif-$label/" \
+              -o "dist/vif-$label.tar.gz" "$GITHUB_REF_NAME"
+          fi
+
+          (cd dist && sha256sum vif-* > SHA256SUMS)
 
       - name: Upload release payload
         uses: actions/upload-artifact@v4
         with:
-          name: nightly-release
+          name: release-payload
           path: dist/
           if-no-files-found: error
           retention-days: 14
 
   image:
     name: Publish headless container
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -107,8 +131,9 @@ jobs:
             ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
 
   release:
-    name: Update nightly prerelease
+    name: Publish release assets
     needs: [artifacts, image]
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -119,10 +144,32 @@ jobs:
       - name: Download release payload
         uses: actions/download-artifact@v4
         with:
-          name: nightly-release
+          name: release-payload
           path: dist
 
+      # A version with a suffix (v0.1.0-rc.1) is a pre-release and says so; only a
+      # plain vX.Y.Z drafts a final release.
+      - name: Draft the tagged release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          flags=(--draft --verify-tag)
+          notes="Built from ${GITHUB_SHA}. vif-$version.tar.gz is the source archive; SHA256SUMS covers every asset. The windows-amd64 zip is an experimental, untested cross-build."
+          case $version in
+          *-*)
+            flags+=(--prerelease)
+            notes="Pre-release, not a final release. $notes"
+            ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" dist/* "${flags[@]}" \
+            --title "vif $GITHUB_REF_NAME" --notes "$notes"
+
       - name: Move nightly tag and publish assets
+        if: github.ref_type != 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -131,11 +178,17 @@ jobs:
           git tag --force nightly "$GITHUB_SHA"
           git push origin refs/tags/nightly --force
 
-          notes="Automated build of ${GITHUB_SHA}. The Linux server archive and GHCR image use the vif_headless profile."
+          title='Nightly development build (not a release)'
+          notes="Not a release: an automated development build of ${GITHUB_SHA}, replaced every night. Flags, files and formats may change without notice. The Linux server archive and GHCR image use the vif_headless profile; the windows-amd64 zip is an experimental, untested cross-build."
           if gh release view nightly >/dev/null 2>&1; then
             gh release upload nightly dist/* --clobber
-            gh release edit nightly --title 'Nightly build' --notes "$notes" --prerelease
+            # The release carries exactly this build, not a renamed or dropped asset.
+            gh release view nightly --json assets --jq '.assets[].name' |
+              while read -r asset; do
+                [ -e "dist/$asset" ] || gh release delete-asset nightly "$asset" --yes
+              done
+            gh release edit nightly --title "$title" --notes "$notes" --prerelease
           else
             gh release create nightly dist/* --target "$GITHUB_SHA" \
-              --title 'Nightly build' --notes "$notes" --prerelease
+              --title "$title" --notes "$notes" --prerelease
           fi
