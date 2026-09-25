@@ -2,9 +2,11 @@ package mode
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/lixenwraith/toml"
 	"github.com/lixenwraith/vif/internal/component"
@@ -12,6 +14,8 @@ import (
 	"github.com/lixenwraith/vif/internal/engine"
 	"github.com/lixenwraith/vif/internal/event"
 	"github.com/lixenwraith/vif/internal/parameter"
+	"github.com/lixenwraith/vif/internal/paths"
+	"github.com/lixenwraith/vif/internal/prof"
 	"github.com/lixenwraith/vif/internal/status"
 	"github.com/lixenwraith/vif/internal/vlog"
 )
@@ -28,7 +32,7 @@ type CommandResult struct {
 var commandNames = []string{
 	"flow", "graph", "l", "log", "q", "quit", "n", "new", "new!", "n!",
 	"f", "free", "a", "auto", "s", "system", "m", "mouse", "e", "emit", "event",
-	"d", "debug", "h", "help", "?", "about", "content", "energy", "heat",
+	"t", "telemetry", "hud", "d", "debug", "h", "help", "?", "about", "content", "energy", "heat",
 	"boost", "god", "demon", "blossom", "decay", "cleaner", "dust",
 	"sp", "speed", "st", "step",
 	"r", "region",
@@ -54,7 +58,7 @@ func ExecuteCommand(ctx *engine.GameContext, command string) CommandResult {
 	// A replay's viewer inspects a world the recording authors
 	if ctx.Viewer.Load() {
 		switch cmd {
-		case "h", "help", "?", "about", "d", "debug", "content", "flow", "graph", "l", "log", "q", "quit":
+		case "h", "help", "?", "about", "t", "telemetry", "hud", "d", "debug", "content", "flow", "graph", "l", "log", "q", "quit":
 		default:
 			setCommandError(ctx, "Command unavailable in a replay: :"+cmd)
 			return CommandResult{Continue: true, KeepPaused: false}
@@ -99,6 +103,10 @@ func ExecuteCommand(ctx *engine.GameContext, command string) CommandResult {
 		return handleMouseCommand(ctx, args)
 	case "e", "emit", "event":
 		return handleEmitCommand(ctx, args)
+	case "t", "telemetry":
+		return handleTelemetryCommand(ctx, args)
+	case "hud":
+		return applyToggle(ctx, &ctx.OverlayHUD, args, "hud", "Telemetry HUD")
 	case "d", "debug":
 		return handleDebugCommand(ctx, args)
 	case "h", "help", "?":
@@ -600,53 +608,161 @@ func parseEventPayload(et event.EventType, raw string) (any, error) {
 	return payload, nil
 }
 
-// handleDebugCommand opens the debug overlay, or runs a debug subcommand
-func handleDebugCommand(ctx *engine.GameContext, args []string) CommandResult {
+// handleTelemetryCommand opens the telemetry overlay, or runs a telemetry subcommand
+func handleTelemetryCommand(ctx *engine.GameContext, args []string) CommandResult {
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
 		case "s", "save", "snap":
-			return handleDebugSaveCommand(ctx)
+			return handleTelemetrySaveCommand(ctx)
 		case "hud":
-			return applyToggle(ctx, &ctx.OverlayHUD, args[1:], "d hud", "Debug HUD")
+			return applyToggle(ctx, &ctx.OverlayHUD, args[1:], "hud", "Telemetry HUD")
 		case "unpin", "clear":
 			ctx.ClearOverlayPins()
 			ctx.SetStatusMessage("Pins cleared", parameter.StatusMessageDefaultTimeout, false)
-			ctx.SetLastCommand(":d unpin")
+			ctx.SetLastCommand(":t unpin")
 			return CommandResult{Continue: true, KeepPaused: false}
 		default:
-			setCommandError(ctx, "Usage: :debug [save|hud|unpin]")
+			setCommandError(ctx, "Usage: :telemetry [save|hud|unpin]")
 			return CommandResult{Continue: true, KeepPaused: false}
 		}
 	}
 
 	ctx.RequestMode(core.ModeOverlay)
 	ctx.SetPaused(true)
-	ctx.PushLocal(event.EventMetaDebugRequest, nil)
+	ctx.PushLocal(event.EventMetaTelemetryRequest, nil)
 	return CommandResult{Continue: true, KeepPaused: true}
 }
 
-// handleDebugSaveCommand writes a standalone status snapshot to its own file
-// Command mode still holds the world lock and the pause, so the values are a
-// single coherent tick. Opens a second logger: a deliberate operator cost
-func handleDebugSaveCommand(ctx *engine.GameContext) CommandResult {
-	if ctx.World.LiveSession() {
-		setCommandError(ctx, "Snapshot save unavailable in a live session")
-		return CommandResult{Continue: true, KeepPaused: false}
-	}
+// snapRecord is one captured snapshot record, written after the lock is released
+type snapRecord struct {
+	sub  string
+	args []any
+}
 
-	path, err := vlog.Dump(func(emit func(sub string, args ...any)) {
-		ctx.SnapshotContext(emit)
-		ctx.World.Resources.Status.Snapshot(emit)
+// handleTelemetrySaveCommand captures the registry and context under the world
+// lock, one coherent tick, and writes the file off it so a live tick never waits
+// on disk. The status bar reports the path once the write drains.
+func handleTelemetrySaveCommand(ctx *engine.GameContext) CommandResult {
+	var records []snapRecord
+	capture := func(sub string, args ...any) { records = append(records, snapRecord{sub, args}) }
+	ctx.SnapshotContext(capture)
+	ctx.World.Resources.Status.Snapshot(capture)
+	run, tick := ctx.Correlation.Stamp()
+
+	core.Go(func() {
+		path, err := vlog.Dump(run, tick, func(emit func(sub string, args ...any)) {
+			for _, r := range records {
+				emit(r.sub, r.args...)
+			}
+		})
+		if err != nil {
+			setCommandError(ctx, "Snapshot failed: "+err.Error())
+			return
+		}
+		vlog.Info("app", "msg", "snapshot saved", "path", path)
+		ctx.SetStatusMessage("Snapshot saved to "+path, parameter.StatusMessageDefaultTimeout, true)
 	})
-	if err != nil {
-		setCommandError(ctx, "Snapshot failed: "+err.Error())
-		return CommandResult{Continue: true, KeepPaused: false}
+
+	ctx.SetLastCommand(":t save")
+	return CommandResult{Continue: true, KeepPaused: false}
+}
+
+// handleDebugCommand opens the profiler report, or runs a profiling subcommand
+func handleDebugCommand(ctx *engine.GameContext, args []string) CommandResult {
+	if len(args) == 0 {
+		ctx.RequestMode(core.ModeOverlay)
+		ctx.SetPaused(true)
+		ctx.PushLocal(event.EventMetaDebugRequest, nil)
+		return CommandResult{Continue: true, KeepPaused: true}
 	}
 
-	vlog.Info("app", "msg", "snapshot saved", "path", path)
-	ctx.SetStatusMessage("Snapshot saved to "+path, parameter.StatusMessageDefaultTimeout, true)
-	ctx.SetLastCommand(":debug save")
+	switch kind := strings.ToLower(args[0]); kind {
+	case "p", "prof":
+		handleProfCommand(ctx, args[1:])
+	case "cpu", "trace":
+		handleCaptureCommand(ctx, kind, args[1:])
+	case "heap":
+		dir := diagnosticsDir()
+		core.Go(func() {
+			path, err := prof.WriteHeap(dir)
+			reportCapture(ctx, "Heap profile", path, err)
+		})
+		ctx.SetStatusMessage("Writing heap profile", parameter.StatusMessageDefaultTimeout, false)
+		ctx.SetLastCommand(":d heap")
+	default:
+		setCommandError(ctx, "Usage: :debug [prof [on|off]|cpu [s]|heap|trace [s]]")
+	}
 	return CommandResult{Continue: true, KeepPaused: false}
+}
+
+// handleProfCommand toggles or sets the profiler; starting it pins its cards
+func handleProfCommand(ctx *engine.GameContext, args []string) {
+	p := ctx.World.Resources.Prof
+	on, explicit, ok := parseToggleArg(args)
+	if !ok {
+		setCommandError(ctx, "Usage: :d prof [on|off]")
+		return
+	}
+	if !explicit {
+		on = !p.Profiling()
+	}
+	p.SetOn(on)
+	msg := "Profiler off"
+	if on {
+		for _, key := range [...]string{"prof", "prof.top"} {
+			if !slices.Contains(ctx.OverlayPins(), key) {
+				ctx.ToggleOverlayPin(key)
+			}
+		}
+		msg = "Profiler on: its cards are pinned to the HUD, :d shows every module"
+	}
+	vlog.Info("app", "msg", "profiler", "on", on)
+	ctx.SetStatusMessage(msg, parameter.StatusMessageDefaultTimeout, false)
+	ctx.SetLastCommand(":d prof " + toggleWord(on))
+}
+
+// handleCaptureCommand starts a timed CPU profile or execution trace
+func handleCaptureCommand(ctx *engine.GameContext, kind string, args []string) {
+	d := parameter.ProfCaptureDefault
+	if len(args) > 0 {
+		secs, err := strconv.Atoi(args[0])
+		if err != nil || secs < 1 || time.Duration(secs)*time.Second > parameter.ProfCaptureMax {
+			setCommandError(ctx, fmt.Sprintf("Usage: :d %s [seconds], at most %v", kind, parameter.ProfCaptureMax))
+			return
+		}
+		d = time.Duration(secs) * time.Second
+	}
+
+	start, label := prof.StartCPU, "CPU profile"
+	if kind == "trace" {
+		start, label = prof.StartTrace, "Trace"
+	}
+	path, err := start(diagnosticsDir(), d, func(path string, err error) { reportCapture(ctx, label, path, err) })
+	if err != nil {
+		setCommandError(ctx, label+" failed: "+err.Error())
+		return
+	}
+	ctx.SetStatusMessage(fmt.Sprintf("%s for %v to %s", label, d, path), d, true)
+	ctx.SetLastCommand(fmt.Sprintf(":d %s %d", kind, int(d.Seconds())))
+}
+
+// reportCapture announces a finished capture from whichever goroutine wrote it
+func reportCapture(ctx *engine.GameContext, label, path string, err error) {
+	if err != nil {
+		setCommandError(ctx, label+" failed: "+err.Error())
+		return
+	}
+	vlog.Info("app", "msg", "capture saved", "kind", label, "path", path)
+	ctx.SetStatusMessage(label+" saved to "+path, parameter.StatusMessageDefaultTimeout, true)
+}
+
+// diagnosticsDir is where captures land: the log directory, or the platform
+// default in a build without logging
+func diagnosticsDir() string {
+	if dir := vlog.Dir(); dir != "" {
+		return dir
+	}
+	return paths.DefaultLogDir()
 }
 
 // handleHelpCommand triggers help overlay event

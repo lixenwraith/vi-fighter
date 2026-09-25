@@ -1,10 +1,10 @@
 # Logging, Telemetry, and Diagnostics
 
-vif's diagnostic surface has five cooperating layers: a structured JSON
+vif's diagnostic surface has six cooperating layers: a structured JSON
 Lines session log, a status metric registry with periodic snapshots, an
 in-memory flight recorder that flushes only on a trigger, a dedicated replay
-journal, and a runtime stderr capture that folds Go runtime output back into
-the log. Ordinary diagnostics join on `run` and `tick`; the journal uses its own
+journal, a runtime stderr capture that folds Go runtime output back into
+the log, and an opt-in profiler that publishes into the registry. Ordinary diagnostics join on `run` and `tick`; the journal uses its own
 replay position `(run, tick, boundary)`.
 
 This document is the authoritative reference for what is emitted, how to
@@ -37,6 +37,7 @@ flowchart TD
 | Flight recorder | `internal/status` | one atomic load/store per frozen metric per tick | on a trigger only |
 | Replay journal | `internal/event`, `internal/vlog` | payload encode on each external event | every non-system-origin event, independent of diagnostic filters |
 | Runtime capture | `internal/core` | one `Stat` per drain interval | when the Go runtime writes to fd 2 |
+| Profiler | `internal/prof` | one atomic load per timed call | once per second of running game while `:d prof` is on; captures on command |
 
 ## 2. Record shape
 
@@ -196,7 +197,7 @@ records is a list that goes stale.
 | `recorder depth changed` | INFO | `ticks` | `:log rec N` |
 | `recorder flush` | INFO | `reason`, `t0`, `ticks`, `records`, `us` | recorder, when the session log absorbed the flush |
 | `recorder flush failed` | ERROR | `reason`, `error` | recorder |
-| `snapshot saved` | INFO | `path` | `:d save` |
+| `snapshot saved` | INFO | `path` | `:t save` |
 | `network session active` | INFO | `local`, `slot`, `coordinator`, `barrier_delay_ticks`, `peers` | this instance's one statement of who it is |
 | `playout lead adopted` | INFO | `ticks`, `tick` | a change of this instance's own lead, at the tick its journaled event dispatched |
 | `participant evicted as too slow` | WARN | `participant`, `late_per_s`, `bytes_per_s`, `window` | the authority's slow policy (multi-player.md §3.5) |
@@ -359,7 +360,7 @@ probed per acquisition.
 |---|---|---|
 | `runtime report` | ERROR | `kind`, `path`, `offset`, `bytes`, `lines`, `head`, `at` |
 
-A pointer to a block of captured runtime output. See §9.
+A pointer to a block of captured runtime output. See §10.
 
 ### `sub="crash"`
 
@@ -431,7 +432,7 @@ different numbers and both names are accurate; only reading one for the other is
 wrong.
 
 The bounded roster still registers every slot before `Freeze`, but inactive
-slots do not produce periodic snapshot records or debug cards. The flight
+slots do not produce periodic snapshot records or telemetry cards. The flight
 recorder emits a player's groups when that slot was active anywhere in the
 flushed history window. Bare single-player keys such as `energy.current` mirror
 slot 0 temporarily for configuration compatibility.
@@ -450,16 +451,18 @@ owners of the convention:
 | `_ms` | milliseconds |
 | anything else | plain count |
 
-Display consumers — the debug overlay, the status bar, log viewers — resolve
+Display consumers — the telemetry overlay, the status bar, log viewers — resolve
 through `FormatInt`. The log stores the raw integer. Where a value has to fit a
 column rather than a line, `FormatCount` gives it a thousandfold suffix and
 `FormatLatency` picks the time unit; both are display only.
 
-The debug overlay scrolls through the full height of a clipped selected card
-before `j`/`k` moves to its neighbour. Its pinned-card HUD is anchored at the
-top-left, wraps whole cards into additional columns, and reports any groups it
-cannot fit in a one-line `hidden` notice. HUD width expands immediately but
-contracts only after a stable narrow interval, preventing value-width jitter.
+The telemetry overlay (`:t`) shows one card per visible group. `/` filters the
+cards by group or metric name, and `j`/`k` scrolls through the full height of a
+clipped selected card before moving to its neighbour. Space pins a card; a new
+pin turns on the HUD (`:hud`), which is anchored at the top-left, wraps whole
+cards into additional columns, and reports any groups it cannot fit in a
+one-line `hidden` notice. HUD width expands immediately but contracts only after
+a stable narrow interval, preventing value-width jitter.
 
 ### Freeze
 
@@ -513,10 +516,10 @@ disables periodic emission entirely without affecting the recorder.
 
 ## 7. On-demand snapshot
 
-`:d save` writes a standalone file `vif-snap-<timestamp>.jsonl` through a
-second logger instance, independent of the session logger's state, level, and
-scopes. Command mode holds the world lock and the pause, so the values are a
-single coherent tick.
+`:t save` writes a standalone file `vif-snap-<timestamp>.jsonl` into the log
+directory through a second logger instance, independent of the session logger's
+state, level, and scopes. The records are captured while command mode holds the
+world lock, so the values are one coherent tick, and stamped with that tick.
 
 The file contains the full registry snapshot plus four records that have no
 registry mirror, emitted by `GameContext.SnapshotContext`:
@@ -529,10 +532,10 @@ registry mirror, emitted by `GameContext.SnapshotContext`:
 | `session` | frame, pause, macro recording/playback, mouse preferences, and auto-fire |
 
 `session` is operator-owned and omitted by `App.SnapshotSimulation`; the full
-snapshot keeps it for `:d save` and perturbation diagnostics.
+snapshot keeps it for `:t save` and perturbation diagnostics.
 
-The call is blocking: it opens, fills, drains, and closes before returning.
-This is an operator cost, acceptable at a command prompt and nowhere else.
+The file is written off the lock on its own goroutine, so a live session's tick
+never waits on disk; the status bar reports the path once the drain completes.
 
 ## 8. Flight recorder
 
@@ -783,7 +786,35 @@ At shutdown the drain runs once more, fd 2 is restored, and an empty capture is
 removed. `-dev` defaults **on** for race builds and is disabled with
 `-dev=false`.
 
-## 11. Control surface
+## 11. Profiler
+
+`:d prof` times every system `Update`, every system's event handlers, every
+renderer and the engine phases around them, and samples the process, once per
+`ProfWindow` (1 s) of running game. Off, a timed call costs one atomic load; on,
+about 90 ns. A window closes on a tick and never spans a pause. It publishes into
+activity-gated registry groups, so their cards exist only while it runs and reach
+the HUD, snapshots, the recorder, `vif-log` and `/metrics` like other telemetry:
+
+| Group | Contents |
+|---|---|
+| `prof` | Mean µs per tick of `tick`, `tick_wait` (lock acquisition), `fsm`, `dispatch` (every pass, in a tick or between), `systems`, `status`; per frame of `frame`, `frame_wait`, `render`, `flush`; `tick_max_us`, `frame_max_us` |
+| `prof.top` | The ten costliest leaf timers as `<kind> <name> <mean> <share of wall time>`; kinds are `sys`, `evt`, `draw` and `core` |
+| `proc` | CPU user/sys percent of one core, peak RSS, Go-mapped and live-heap MiB, allocation MiB/s and objects/s, GC cycles/s, goroutines, block reads and writes/s, voluntary and involuntary context switches/s; the operating-system counters read zero off unix |
+
+Starting it pins `prof` and `prof.top`; `:d` opens the whole report, every
+module ranked by share with its mean, max and calls per second. The groups
+measure the process: a reset does not clear them and no comparison reads them.
+
+Captures land in the log directory, also in a `novlog` build, and run whether
+or not the profiler is on:
+
+| Command | File | Read with |
+|---|---|---|
+| `:d cpu [s]` | `vif-cpu-<time>.pprof`; 10 s default, 5 min cap | `go tool pprof`; samples carry `kind` and `module` labels, so `-tagfocus module=drain` isolates one |
+| `:d heap` | `vif-heap-<time>.pprof`, after a GC | `go tool pprof -sample_index=alloc_space` for allocation sites, `inuse_space` for retention |
+| `:d trace [s]` | `vif-trace-<time>.out` | `go tool trace`; every timed call is a region named `<kind> <name>` |
+
+## 12. Control surface
 
 ### Startup flags
 
@@ -850,7 +881,9 @@ use their independently configured journal directory.
 | `:log rec <ticks>` | Set the recorder depth; discards history |
 | `:log rec flush` | Request a window flush on the next tick |
 | `:log rec fsm [on\|off]` | Toggle the FSM transition trigger |
-| `:d save` | Write a standalone snapshot (§7) |
+| `:t save` | Write a standalone snapshot (§7) |
+| `:d`, `:d prof [on\|off]` | Profiler report; start or stop the profiler (§11) |
+| `:d cpu [s]`, `:d heap`, `:d trace [s]` | Write a CPU profile, heap profile or execution trace (§11) |
 | `:content` | Corpus telemetry in the status bar |
 
 `:log` reports `log <path> | level <L> | scope <S> | stat <N> | rec <M>`.
@@ -859,7 +892,7 @@ Starting a session opens a file under the world lock — a deliberate operator
 cost. Stopping detaches the sink immediately and drains on another goroutine,
 so a command handler never waits on disk while holding the lock.
 
-## 12. Sink policy
+## 13. Sink policy
 
 | Policy | Value |
 |---|---|
@@ -890,7 +923,7 @@ Each logger instance is independent: the session log, replay journal, an
 on-demand snapshot, and a recorder sidecar can be open simultaneously without
 contending for one buffer.
 
-## 13. Call-site rules
+## 14. Call-site rules
 
 **Argument lifetime.** Records are formatted asynchronously on the logger
 goroutine, up to `BufferSize` records after the call. Pass primitives and value
@@ -929,7 +962,7 @@ it.
 **Status over logging for state.** A value that has a current reading belongs
 in the registry. A value that describes a *transition* belongs in the log.
 
-## 14. Build variants
+## 15. Build variants
 
 `internal/vlog` is build-tagged. On `wasm` or with the `novlog` tag, emission
 entry points are no-ops, session/journal start reports `vlog.ErrDisabled`, and
@@ -940,7 +973,7 @@ requires a logging-enabled native build.
 
 `make nolog` produces a release build with the tag.
 
-## 15. Diagnostic playbooks
+## 16. Diagnostic playbooks
 
 **"The FSM is in the wrong state."** `-ls afs`. Filter `sub=fsm`. The
 `transition` records give the complete ordered path including intra-tick
@@ -954,7 +987,9 @@ never pushed: add `-ls +p` to see the producer side.
 
 **"The game stutters."** `-ls al -lv debug`. `sub=lock msg="long hold"` records
 carry the holder's call chain. Each one also triggers a recorder flush, so the
-20 Hz state history around the stall is in the same file.
+20 Hz state history around the stall is in the same file. `:d prof on` names
+the modules the tick and frame spend on; `:d trace 5` across a stutter shows
+each one on the timeline.
 
 **"State was lost."** `sub=event msg="queue overflow"` reports the count. The
 recorder flushes automatically with `reason=event.dropped`; the window shows
@@ -973,7 +1008,7 @@ replay difference on the simulator.
 non-zero value means a metric was registered after `Freeze` and is invisible to
 both the snapshot and the recorder.
 
-## 16. Source map
+## 17. Source map
 
 | Concern | Primary source |
 |---|---|
@@ -995,6 +1030,7 @@ both the snapshot and the recorder.
 | On-demand context snapshot | `internal/engine/snapshot.go` |
 | FSM observation hooks | `internal/fsm/machine.go`, `types.go` |
 | Runtime stderr capture | `internal/core/dev.go`, `crash_handler*.go` |
+| Profiler, captures, process sampling | `internal/prof` |
 | Flags and diagnostics setup | `cmd/vif/main.go` |
 | Runtime commands | `internal/mode/commands.go` |
 | Periods and intervals | `internal/parameter/engine.go` |
