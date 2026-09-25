@@ -7,7 +7,7 @@ LDFLAGS := -s -w
 TAGS ?=
 PORT ?= 8080
 CONTAINER_ENGINE ?= docker
-IMAGE ?= vi-fighter
+IMAGE ?= vif
 IMAGE_TAG ?= dev
 IMAGE_REVISION_DEFAULT != git rev-parse HEAD 2>/dev/null || echo unknown
 IMAGE_REVISION ?= $(IMAGE_REVISION_DEFAULT)
@@ -239,7 +239,7 @@ image-check:
 arch-check:
 	@pkgs="$(ARCH_LEAF_PKGS)"; pkgs="$${pkgs:-$$($(GO) list ./pkg/... 2>/dev/null | tr '\n' ' ')}"; \
 	if [ -z "$$pkgs" ]; then echo "arch-check: no packages found in pkg/"; exit 0; fi; \
-	bad=$$($(GO) list -deps $$pkgs | grep 'vi-fighter/internal' || true); \
+	bad=$$($(GO) list -deps $$pkgs | grep 'vif/internal' || true); \
 	if [ -n "$$bad" ]; then echo "FAIL: leaf package(s) import internal:"; echo "$$bad"; exit 1; fi; \
 	echo "arch-check: $$pkgs clean"
 
