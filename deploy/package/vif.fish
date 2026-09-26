@@ -1,10 +1,10 @@
 # Generated from cmd/vif/usage.go by TestGeneratedFilesAreTheHelpTable; do not edit.
 complete -c vif -f
-complete -c vif -o host -x -d 'Bind and play a session, e.g. :7777'
+complete -c vif -o host -x -d 'Play at once and open the game to participants, e.g. :7777'
 complete -c vif -o serve -x -d 'Bind a headless session with no local cursor'
-complete -c vif -o join -x -d 'Join a session at host:port, at the vif://host:port/name a link carries, or at a wss:// route'
+complete -c vif -o join -x -d 'Join a session at [tcp://|vif://]host:port[/name] or a wss:// route; tcp when no scheme is given'
 complete -c vif -o name -x -d 'Name this host answers to, so one address can serve several sessions'
-complete -c vif -o players -x -d 'Roster ceiling including self, 2..16; unset holds the whole roster and starts on the first guest'
+complete -c vif -o players -x -d 'Roster ceiling including self, 2..16; unset holds the whole roster'
 complete -c vif -o authority -x -a 'host migrate' -d 'Where authorship goes when the authoring participant leaves; default host with -serve, migrate otherwise'
 complete -c vif -o slow-window -x -d 'Window a participant\'s lateness is judged over; host only, 0 never evicts (default 20s)'
 complete -c vif -o slow-late -x -d 'Evict at this many late epochs per second over the window; 0 ignores lateness (default 5)'
@@ -41,6 +41,7 @@ complete -c vif -o lr -o log-recorder -x -d 'Flight recorder depth in game ticks
 complete -c vif -o log-session-id -x -d 'Attach a session ID to every application log record; implies -l'
 complete -c vif -o log-stdout -d 'Write the log to stdout as JSON instead of to a file; implies -l'
 complete -c vif -o j -o journal -d 'Record a replay journal; DIR overrides $XDG_STATE_HOME/vif/journal'
+complete -c vif -o mw -o music-wav -d 'Record the music alone, as it plays, to a WAV file; DIR overrides $XDG_STATE_HOME/vif/music'
 complete -c vif -o dev -d 'Capture runtime stderr to a file; on by default for -race builds'
 complete -c vif -o h -o help -d 'Print this and exit'
 complete -c vif -o version -d 'Print the module version and commit a package should report'

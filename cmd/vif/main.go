@@ -2,9 +2,9 @@ package main
 
 import (
 	"cmp"
+	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -61,6 +61,7 @@ var (
 	flagLogs         = newLogFlags()
 	flagSession      sessionFlags
 	flagJournal      = newSetFlag(true, parseOutputDirFlag)
+	flagMusicWAV     = newSetFlag(true, parseOutputDirFlag)
 	flagDev          = newSetFlag(true, parseBoolFlag)
 
 	// settings is vif.toml as the roots of -config-dir resolved it.
@@ -78,6 +79,9 @@ func init() {
 	journalHint := "Record a replay journal; -j=DIR overrides the user-state directory"
 	flag.Var(&flagJournal, "j", journalHint)
 	flag.Var(&flagJournal, "journal", journalHint)
+	musicHint := "Record the music as WAV; -mw=DIR overrides the user-state directory"
+	flag.Var(&flagMusicWAV, "mw", musicHint)
+	flag.Var(&flagMusicWAV, "music-wav", musicHint)
 	flag.Var(&flagDev, "dev", "Capture runtime stderr to a file; -dev=false disables")
 
 	// The `flag` package writes its own usage to stderr and exits non-zero, which
@@ -120,7 +124,7 @@ func main() {
 		fmt.Println("settings ok:", cmp.Or(settingsPath, "embedded default"))
 		err = resource.Check(buildConfig().Resources, os.Stdout)
 	case *flagReplay != "":
-		err = app.PlayJournal(flagConfig.options(), *flagMute, *flagReplay)
+		err = app.PlayJournal(buildConfig(), *flagReplay)
 	case *flagScript != "":
 		cfg := buildConfig()
 		if *flagWatch {
@@ -251,19 +255,21 @@ func buildConfig() app.Config {
 		TimeScaleSpec: *flagSpeed,
 		Seed:          *flagSeed,
 		Journal:       flagJournal.set,
-		HostAddress:   flagSession.host,
 		SessionName:   flagSession.name,
 		Participants:  flagSession.players,
-		ListenAddress: flagSession.listen,
 		NoAdvertise:   flagSession.noAdvertise,
 	}
 
 	// Validated in validateInvocation; a link's name overrides nothing, because a
 	// joiner has no -name of its own.
-	cfg.JoinAddress, cfg.SessionName = network.ParseJoinTarget(flagSession.join, cfg.SessionName)
+	if flagSession.join != "" {
+		join := endpoint(flagSession.join)
+		cfg.JoinAddress, cfg.SessionName = join.Addr, cmp.Or(join.Name, cfg.SessionName)
+	}
+	cfg.HostAddress, cfg.ListenAddress = endpoint(flagSession.host).Addr, endpoint(flagSession.listen).Addr
 
 	if flagSession.serve != "" {
-		cfg.HostAddress = flagSession.serve
+		cfg.HostAddress = endpoint(flagSession.serve).Addr
 		cfg.ProbeAddress = flagSession.probe
 		cfg.Lifetime = flagSession.lifetime()
 	}
@@ -281,6 +287,7 @@ func buildConfig() app.Config {
 	}
 
 	cfg.AudioMuted = *flagMute
+	cfg.MusicWAV = musicWAVDir()
 	cfg.AudioBuffer = time.Duration(settings.Audio.BufferMs) * time.Millisecond
 
 	switch *flagColor {
@@ -292,6 +299,14 @@ func buildConfig() app.Config {
 	// colourAuto leaves ColorModeSet false, which is the terminal deciding.
 
 	return cfg
+}
+
+// musicWAVDir is where -mw records the music, "" when it was not asked for.
+func musicWAVDir() string {
+	if !flagMusicWAV.set {
+		return ""
+	}
+	return cmp.Or(flagMusicWAV.value, paths.DefaultMusicDir())
 }
 
 // applySettings makes vif.toml the default of each path flag it names: a flag given
@@ -308,6 +323,7 @@ func applySettings(s paths.Settings) {
 	fill(&flagConfig.keymap, p.Keymap)
 	fill(&flagLogs.dir.value, p.Log)
 	fill(&flagJournal.value, p.Journal)
+	fill(&flagMusicWAV.value, p.Music)
 	if !flagConfig.embedded {
 		fill(&flagConfig.scenario, p.Scenario)
 		fill(&flagConfig.content, p.Content)
@@ -400,7 +416,7 @@ func (f sessionFlags) lifetime() lifecycle.Policy {
 
 func (f *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.host, "host", "", "Host a session on bind address, e.g. :7777")
-	fs.StringVar(&f.join, "join", "", "Join a session at host:port, at the vif://host:port/name a link carries, or at the wss:// route a browser build is given")
+	fs.StringVar(&f.join, "join", "", "Join a session at [tcp://|vif://]host:port[/name] or at the wss:// route a browser build is given; tcp when no scheme is given")
 	fs.StringVar(&f.name, "name", "", "Name this host answers to, so one address can serve several sessions")
 	fs.StringVar(&f.serve, "serve", "", "Host a headless session with no local player, e.g. :7777")
 	fs.StringVar(&f.probe, "probe", "", "Serve liveness, readiness and metrics for a -serve run, e.g. :7788")
@@ -412,9 +428,7 @@ func (f *sessionFlags) register(fs *flag.FlagSet) {
 	fs.DurationVar(&f.drain, "drain", 0,
 		"With -serve, how long a termination signal waits for the roster to empty before exiting anyway; 0 exits at once")
 	fs.IntVar(&f.players, "players", 0, fmt.Sprintf(
-		"Ceiling on the roster, itself included (2..%d; default the whole roster). "+
-			"With -host it also sizes the startup lobby, which then waits for exactly that "+
-			"many; unset, a host starts on its first guest and admits the rest as they arrive",
+		"Ceiling on the roster, itself included (2..%d; default the whole roster)",
 		parameter.MaxPlayers))
 	fs.StringVar(&f.listen, "listen", "", fmt.Sprintf(
 		"With -join in a %q session, the address this participant is dialled back on. "+
@@ -436,13 +450,11 @@ func (f *sessionFlags) register(fs *flag.FlagSet) {
 		authorityMigrate, authorityHost, authorityHost, authorityMigrate))
 }
 
-// authorityMigrate and authorityHost are the two -authority words. They name the
-// question the flag answers — where authorship lives when the participant holding
-// it goes — rather than a mechanism, because the mechanism is the part that may
-// change.
+// authorityMigrate and authorityHost are the two -authority words, the ones
+// :host takes.
 const (
-	authorityMigrate = "migrate"
-	authorityHost    = "host"
+	authorityMigrate = app.AuthorityMigrate
+	authorityHost    = app.AuthorityHost
 )
 
 func (f sessionFlags) validateInvocation(schema, check bool, replay string) error {
@@ -463,9 +475,25 @@ func (f sessionFlags) validateInvocation(schema, check bool, replay string) erro
 	if f.name != "" && (f.join != "" || (f.host == "" && f.serve == "")) {
 		return fmt.Errorf("-name is what a host answers to; a joiner names the session in its -join target")
 	}
-	if _, name := network.ParseJoinTarget(f.join, f.name); name != "" {
-		if err := validSessionName(name); err != nil {
-			return err
+	for _, a := range []struct {
+		flag, target string
+		binds        bool
+	}{{"-join", f.join, false}, {"-host", f.host, true}, {"-serve", f.serve, true}, {"-listen", f.listen, true}} {
+		if a.target == "" {
+			continue
+		}
+		e, err := network.ParseEndpoint(a.target)
+		switch {
+		case err != nil:
+		case a.binds && e.Name != "":
+			err = errors.New("a bound address names no session; a host answers to -name")
+		case a.binds:
+			err = e.Listenable()
+		case e.Name != "":
+			err = validSessionName(e.Name)
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.flag, err)
 		}
 	}
 	if (f.listen != "" || f.noAdvertise) && f.join == "" {
@@ -473,11 +501,6 @@ func (f sessionFlags) validateInvocation(schema, check bool, replay string) erro
 	}
 	if f.listen != "" && f.noAdvertise {
 		return fmt.Errorf("-listen names an address to publish and -no-advertise refuses to publish one")
-	}
-	if f.listen != "" {
-		if _, _, err := net.SplitHostPort(f.listen); err != nil {
-			return fmt.Errorf("-listen %q is not an address: %w", f.listen, err)
-		}
 	}
 	if f.serve != "" && (f.host != "" || f.join != "") {
 		return fmt.Errorf("-serve is a host of its own; it does not combine with -host or -join")
@@ -497,6 +520,12 @@ func (f sessionFlags) validateInvocation(schema, check bool, replay string) erro
 		}
 	}
 	return nil
+}
+
+// endpoint is a target validateInvocation has already parsed; "" is the zero value.
+func endpoint(target string) network.Endpoint {
+	e, _ := network.ParseEndpoint(target)
+	return e
 }
 
 // validSessionName holds a name to what a URL path, a Kubernetes object name and a
